@@ -1,11 +1,10 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  BANCO_DE_VAGAS,
   CARGOS,
   INSTRUCAO_PADRAO,
   MODALIDADES,
   STATUS,
-  VAGAS,
-  VAGAS_BANCO,
 } from './data/vagas'
 
 /* ------------------------------------------------------------------ *
@@ -17,7 +16,7 @@ const COLUNAS =
   'minmax(150px,1.45fr) minmax(108px,0.9fr) minmax(108px,0.9fr) 96px 112px 104px 76px 96px 34px'
 
 const TITULOS = {
-  vagas: ['Vagas', 'Gerencie e acompanhe todas as vagas de TI'],
+  vagas: ['Vagas', 'Busque no banco de vagas de TI'],
   banco: ['Banco de Dados', 'Histórico completo de vagas coletadas'],
   ia: ['Avaliação IA', 'Compatibilidade entre vagas e seu perfil'],
 }
@@ -501,7 +500,12 @@ function Lateral({ aba, onAba }) {
   )
 }
 
-function Cabecalho({ aba, busca, onBusca }) {
+/**
+ * `mostrarBusca` fica falso na aba Vagas: lá quem busca é o campo em
+ * destaque do corpo da página, e dois campos de busca na mesma tela só
+ * confundiriam.
+ */
+function Cabecalho({ aba, busca, onBusca, mostrarBusca }) {
   const [titulo, subtitulo] = TITULOS[aba]
   const botaoIcone = {
     width: 38,
@@ -586,70 +590,72 @@ function Cabecalho({ aba, busca, onBusca }) {
           minWidth: 0,
         }}
       >
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 9,
-            flex: '1 1 240px',
-            minWidth: 0,
-            maxWidth: 390,
-            padding: '10px 12px',
-            borderRadius: 10,
-            border: '1px solid rgba(255,255,255,0.07)',
-            background: '#0B1220',
-          }}
-        >
-          <svg
-            width="16"
-            height="16"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="#8A94A6"
-            strokeWidth="2"
-          >
-            <circle cx="11" cy="11" r="7" />
-            <path d="M16.5 16.5 21 21" />
-          </svg>
-          <input
-            value={busca}
-            onChange={onBusca}
-            placeholder="Buscar vaga, tecnologia ou empresa..."
+        {mostrarBusca && (
+          <div
             style={{
-              flex: 1,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 9,
+              flex: '1 1 240px',
               minWidth: 0,
-              background: 'transparent',
-              border: 'none',
-              outline: 'none',
-              color: '#E8ECF4',
-              fontSize: 13.5,
+              maxWidth: 390,
+              padding: '10px 12px',
+              borderRadius: 10,
+              border: '1px solid rgba(255,255,255,0.07)',
+              background: '#0B1220',
             }}
-          />
-          <span
-            style={{ display: 'flex', gap: 4, color: '#6E7789', fontSize: 11 }}
           >
-            <kbd
-              style={{
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: 5,
-                padding: '2px 5px',
-                fontFamily: 'inherit',
-              }}
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="#8A94A6"
+              strokeWidth="2"
             >
-              ⌘
-            </kbd>
-            <kbd
+              <circle cx="11" cy="11" r="7" />
+              <path d="M16.5 16.5 21 21" />
+            </svg>
+            <input
+              value={busca}
+              onChange={onBusca}
+              placeholder="Buscar vaga, tecnologia ou empresa..."
               style={{
-                border: '1px solid rgba(255,255,255,0.1)',
-                borderRadius: 5,
-                padding: '2px 5px',
-                fontFamily: 'inherit',
+                flex: 1,
+                minWidth: 0,
+                background: 'transparent',
+                border: 'none',
+                outline: 'none',
+                color: '#E8ECF4',
+                fontSize: 13.5,
               }}
+            />
+            <span
+              style={{ display: 'flex', gap: 4, color: '#6E7789', fontSize: 11 }}
             >
-              K
-            </kbd>
-          </span>
-        </div>
+              <kbd
+                style={{
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: 5,
+                  padding: '2px 5px',
+                  fontFamily: 'inherit',
+                }}
+              >
+                ⌘
+              </kbd>
+              <kbd
+                style={{
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  borderRadius: 5,
+                  padding: '2px 5px',
+                  fontFamily: 'inherit',
+                }}
+              >
+                K
+              </kbd>
+            </span>
+          </div>
+        )}
 
         <button
           className={classeBotaoIcone}
@@ -718,6 +724,142 @@ function Cabecalho({ aba, busca, onBusca }) {
         </button>
       </div>
     </header>
+  )
+}
+
+/** Campo de busca principal da aba Vagas. */
+function BuscaDestaque({ valor, onChange, onLimpar }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 12,
+        maxWidth: 680,
+        marginBottom: 14,
+        padding: '14px 16px',
+        borderRadius: 12,
+        border: `1px solid ${valor ? 'rgba(59,130,246,0.35)' : 'rgba(255,255,255,0.09)'}`,
+        background: '#0B1220',
+      }}
+    >
+      <svg
+        width="19"
+        height="19"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="#60A5FA"
+        strokeWidth="1.9"
+        style={{ flex: '0 0 19px' }}
+      >
+        <circle cx="11" cy="11" r="7" />
+        <path d="M16.5 16.5 21 21" />
+      </svg>
+      <input
+        value={valor}
+        onChange={onChange}
+        autoFocus
+        placeholder="Busque por cargo, tecnologia ou empresa..."
+        style={{
+          flex: 1,
+          minWidth: 0,
+          background: 'transparent',
+          border: 'none',
+          outline: 'none',
+          color: '#E8ECF4',
+          fontSize: 15,
+        }}
+      />
+      {valor && (
+        <button
+          onClick={onLimpar}
+          aria-label="Limpar busca"
+          className="bg-transparent text-[#7C8699] hover:bg-white/[0.06] hover:text-[#E8ECF4]"
+          style={{
+            flex: '0 0 26px',
+            width: 26,
+            height: 26,
+            borderRadius: 7,
+            border: 'none',
+            cursor: 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <path d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        </button>
+      )}
+    </div>
+  )
+}
+
+/** Estado da aba Vagas enquanto não há busca nem filtro aplicado. */
+function EsperaBusca({ total }) {
+  return (
+    <div
+      style={{
+        border: '1px solid rgba(255,255,255,0.06)',
+        background: '#0B1220',
+        borderRadius: 12,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 14,
+        padding: '80px 24px',
+        minHeight: 340,
+      }}
+    >
+      <div
+        style={{
+          width: 56,
+          height: 56,
+          borderRadius: 16,
+          border: '1px solid rgba(59,130,246,0.22)',
+          background: 'rgba(37,99,235,0.1)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <svg
+          width="24"
+          height="24"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#60A5FA"
+          strokeWidth="1.6"
+        >
+          <circle cx="11" cy="11" r="7" />
+          <path d="M16.5 16.5 21 21" />
+        </svg>
+      </div>
+      <div style={{ fontSize: 16, fontWeight: 600 }}>
+        Busque no banco de vagas
+      </div>
+      <div
+        style={{
+          fontSize: 13.5,
+          color: '#8A94A6',
+          maxWidth: 380,
+          textAlign: 'center',
+          lineHeight: 1.6,
+        }}
+      >
+        {total} vagas disponíveis para consulta. Digite um cargo, tecnologia ou
+        empresa — ou use os filtros acima.
+      </div>
+    </div>
   )
 }
 
@@ -1934,8 +2076,8 @@ function ModalNovaVaga({ form, onCampo, onFechar, onSalvar }) {
 /* ------------------------------ app ------------------------------ */
 
 export default function App() {
-  const [vagas, setVagas] = useState(VAGAS)
-  const [vagasBanco, setVagasBanco] = useState(VAGAS_BANCO)
+  // Base única: as duas abas leem e escrevem no mesmo banco de vagas.
+  const [banco, setBanco] = useState(BANCO_DE_VAGAS)
 
   const [aba, setAba] = useState('vagas')
   const [cargo, setCargo] = useState('')
@@ -1977,12 +2119,9 @@ export default function App() {
     return () => window.removeEventListener('click', aoClicar)
   }, [])
 
-  const fonte = aba === 'banco' ? vagasBanco : vagas
-  const atualizarFonte = aba === 'banco' ? setVagasBanco : setVagas
-
   const filtradas = useMemo(() => {
     const termos = busca.trim().toLowerCase().split(/\s+/).filter(Boolean)
-    const lista = fonte.filter((j) => {
+    const lista = banco.filter((j) => {
       if (cargo && j.cargo !== cargo) return false
       if (empresa && j.empresa !== empresa) return false
       if (cidade && j.cidade !== cidade) return false
@@ -1994,10 +2133,10 @@ export default function App() {
       return termos.every((t) => alvo.includes(t))
     })
     return ordenar(lista, ordem, direcao)
-  }, [fonte, cargo, busca, empresa, cidade, modalidade, status, ordem, direcao])
+  }, [banco, cargo, busca, empresa, cidade, modalidade, status, ordem, direcao])
 
-  const empresas = useMemo(() => unicos(fonte, 'empresa'), [fonte])
-  const cidades = useMemo(() => unicos(fonte, 'cidade'), [fonte])
+  const empresas = useMemo(() => unicos(banco, 'empresa'), [banco])
+  const cidades = useMemo(() => unicos(banco, 'cidade'), [banco])
 
   const total = filtradas.length
   const maxPagina = Math.max(1, Math.ceil(total / porPagina))
@@ -2006,6 +2145,13 @@ export default function App() {
   const visiveis = filtradas.slice(inicio, inicio + porPagina)
 
   const ehTabela = aba === 'vagas' || aba === 'banco'
+
+  // Na aba Vagas nada aparece até haver o que buscar: um termo digitado ou
+  // qualquer filtro escolhido. A aba Banco de Dados mostra o acervo sempre.
+  const buscaAtiva = Boolean(
+    busca.trim() || cargo || empresa || cidade || modalidade || status,
+  )
+  const mostrarResultados = aba === 'banco' || buscaAtiva
 
   function irParaAba(nova) {
     setAba(nova)
@@ -2037,12 +2183,12 @@ export default function App() {
 
   function alterarVaga(id, fn) {
     setMenu(null)
-    atualizarFonte((lista) => lista.map((x) => (x.id === id ? fn(x) : x)))
+    setBanco((lista) => lista.map((x) => (x.id === id ? fn(x) : x)))
   }
 
   function arquivarVaga(id) {
     setMenu(null)
-    atualizarFonte((lista) => lista.filter((x) => x.id !== id))
+    setBanco((lista) => lista.filter((x) => x.id !== id))
   }
 
   function registrarCv(arquivo) {
@@ -2082,7 +2228,7 @@ export default function App() {
       seen: false,
       fav: false,
     }
-    setVagas((lista) => [nova, ...lista])
+    setBanco((lista) => [nova, ...lista])
     setModalAberto(false)
     setPagina(1)
     setForm(FORM_VAZIO)
@@ -2112,6 +2258,7 @@ export default function App() {
         <Cabecalho
           aba={aba}
           busca={busca}
+          mostrarBusca={aba !== 'vagas'}
           onBusca={(e) => {
             setBusca(e.target.value)
             setPagina(1)
@@ -2120,6 +2267,20 @@ export default function App() {
 
         {ehTabela && (
           <div>
+            {aba === 'vagas' && (
+              <BuscaDestaque
+                valor={busca}
+                onChange={(e) => {
+                  setBusca(e.target.value)
+                  setPagina(1)
+                }}
+                onLimpar={() => {
+                  setBusca('')
+                  setPagina(1)
+                }}
+              />
+            )}
+
             <Filtros
               cargo={cargo}
               empresa={empresa}
@@ -2151,72 +2312,92 @@ export default function App() {
               onLimpar={limparFiltros}
             />
 
-            <div
-              style={{
-                border: '1px solid rgba(255,255,255,0.06)',
-                background: '#0B1220',
-                borderRadius: 12,
-                overflow: 'hidden',
-              }}
-            >
-              {!estreito && total > 0 && (
-                <div style={{ overflowX: 'auto' }}>
-                  <CabecalhoTabela
-                    ordem={ordem}
-                    direcao={direcao}
-                    onOrdenar={ordenarPor}
-                    dicaAberta={dicaAberta}
-                    onDica={setDicaAberta}
+            {!mostrarResultados ? (
+              <EsperaBusca total={banco.length} />
+            ) : (
+              <>
+                {/* Com zero resultados quem fala é o bloco "Nenhuma vaga
+                    encontrada" logo abaixo; a contagem seria redundante. */}
+                {aba === 'vagas' && total > 0 && (
+                  <div
+                    style={{ fontSize: 13, color: '#8A94A6', marginBottom: 12 }}
+                  >
+                    <strong style={{ color: '#E8ECF4', fontWeight: 600 }}>
+                      {total}
+                    </strong>{' '}
+                    {total === 1 ? 'vaga encontrada' : 'vagas encontradas'}
+                    {busca.trim() ? ` para “${busca.trim()}”` : null}
+                  </div>
+                )}
+
+                <div
+                  style={{
+                    border: '1px solid rgba(255,255,255,0.06)',
+                    background: '#0B1220',
+                    borderRadius: 12,
+                    overflow: 'hidden',
+                  }}
+                >
+                  {!estreito && total > 0 && (
+                    <div style={{ overflowX: 'auto' }}>
+                      <CabecalhoTabela
+                        ordem={ordem}
+                        direcao={direcao}
+                        onOrdenar={ordenarPor}
+                        dicaAberta={dicaAberta}
+                        onDica={setDicaAberta}
+                      />
+                      {visiveis.map((vaga) => (
+                        <Linha
+                          key={vaga.id}
+                          vaga={vaga}
+                          menuAberto={menu === vaga.id}
+                          onMenu={(e) => {
+                            e.stopPropagation()
+                            setMenu((atual) => (atual === vaga.id ? null : vaga.id))
+                          }}
+                          onDetalhes={(e) => {
+                            e.stopPropagation()
+                            alterarVaga(vaga.id, (x) => ({ ...x, seen: true }))
+                          }}
+                          onFavorito={(e) => {
+                            e.stopPropagation()
+                            alterarVaga(vaga.id, (x) => ({ ...x, fav: !x.fav }))
+                          }}
+                          onArquivar={(e) => {
+                            e.stopPropagation()
+                            arquivarVaga(vaga.id)
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
+  
+                  {estreito && total > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                      {visiveis.map((vaga) => (
+                        <Card key={vaga.id} vaga={vaga} />
+                      ))}
+                    </div>
+                  )}
+  
+                  {total === 0 && <SemResultados onLimpar={limparFiltros} />}
+  
+                  <Paginacao
+                    total={total}
+                    inicio={inicio}
+                    porPagina={porPagina}
+                    pagina={paginaAtual}
+                    maxPagina={maxPagina}
+                    onPagina={setPagina}
+                    onPorPagina={(e) => {
+                      setPorPagina(parseInt(e.target.value, 10))
+                      setPagina(1)
+                    }}
                   />
-                  {visiveis.map((vaga) => (
-                    <Linha
-                      key={vaga.id}
-                      vaga={vaga}
-                      menuAberto={menu === vaga.id}
-                      onMenu={(e) => {
-                        e.stopPropagation()
-                        setMenu((atual) => (atual === vaga.id ? null : vaga.id))
-                      }}
-                      onDetalhes={(e) => {
-                        e.stopPropagation()
-                        alterarVaga(vaga.id, (x) => ({ ...x, seen: true }))
-                      }}
-                      onFavorito={(e) => {
-                        e.stopPropagation()
-                        alterarVaga(vaga.id, (x) => ({ ...x, fav: !x.fav }))
-                      }}
-                      onArquivar={(e) => {
-                        e.stopPropagation()
-                        arquivarVaga(vaga.id)
-                      }}
-                    />
-                  ))}
                 </div>
-              )}
-
-              {estreito && total > 0 && (
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
-                  {visiveis.map((vaga) => (
-                    <Card key={vaga.id} vaga={vaga} />
-                  ))}
-                </div>
-              )}
-
-              {total === 0 && <SemResultados onLimpar={limparFiltros} />}
-
-              <Paginacao
-                total={total}
-                inicio={inicio}
-                porPagina={porPagina}
-                pagina={paginaAtual}
-                maxPagina={maxPagina}
-                onPagina={setPagina}
-                onPorPagina={(e) => {
-                  setPorPagina(parseInt(e.target.value, 10))
-                  setPagina(1)
-                }}
-              />
-            </div>
+              </>
+            )}
           </div>
         )}
 

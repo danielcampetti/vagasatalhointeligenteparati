@@ -1,8 +1,8 @@
 # VAGAS — Atalho Inteligente para TI
 
-Protótipo de frontend de um dashboard de busca de vagas de TI. Serve para
-mostrar a ideia: navegação, filtros, ordenação, ranking de compatibilidade
-("Rank IA") e a tela de configuração da avaliação.
+Protótipo de frontend de um buscador de vagas de TI. Serve para mostrar a
+ideia: um banco de vagas, a busca dentro dele, filtros, ordenação, ranking de
+compatibilidade ("Rank IA") e a tela de configuração da avaliação.
 
 **Site:** https://danielcampetti.github.io/vagasatalhointeligenteparati/
 
@@ -13,23 +13,30 @@ mostrar a ideia: navegação, filtros, ordenação, ranking de compatibilidade
 Isso é intencional e não é uma pendência:
 
 - Não há servidor, API, banco de dados, autenticação nem variáveis de ambiente.
-- Nenhuma requisição de rede é feita — as vagas são um array estático em
-  `src/data/vagas.js`, carregado em memória junto com o JavaScript da página.
+- Nenhuma requisição de rede é feita — o "banco de vagas" é um array estático
+  em `src/data/vagas.js`, carregado em memória junto com o JavaScript da
+  página. A busca é um filtro rodando no navegador, não uma consulta.
 - O "Rank IA" é um número que já vem nos dados; nada é calculado por IA.
 - O upload de currículo só lê o nome e o tamanho do arquivo no navegador. O
   arquivo não sai da máquina nem é enviado para lugar nenhum.
-- Tudo que você alterar (favoritar, arquivar, criar vaga) vale só para a
-  sessão atual: recarregar a página volta ao estado inicial.
+- Tudo que você alterar (favoritar, arquivar) vale só para a sessão atual:
+  recarregar a página volta ao estado inicial.
 
 ## O que dá para fazer na tela
 
-- **Vagas** — tabela com 42 vagas fictícias: filtros por cargo, empresa,
-  cidade, modalidade e status; busca livre; ordenação por salário, data e
-  Rank IA; paginação; menu por linha (ver detalhes, favoritar, arquivar);
-  e o botão **Nova vaga**, que adiciona uma vaga só nesta sessão.
-- **Banco de Dados** — a mesma tabela sobre um histórico maior (58 vagas).
+O protótipo tem uma base só — 58 vagas fictícias — e duas visões dela:
+
+- **Vagas** — o buscador. Abre num estado de espera, sem resultado nenhum: só
+  aparece tabela depois que você digita algo ou escolhe um filtro (cargo,
+  empresa, cidade, modalidade, status). Com busca ativa vêm a contagem de
+  resultados, a ordenação por salário, data e Rank IA, a paginação e o menu
+  por linha (ver detalhes, favoritar, arquivar).
+- **Banco de Dados** — o acervo. Lista as 58 vagas de uma vez, com os mesmos
+  filtros.
 - **Avaliação IA** — área de currículo e o texto que orientaria a nota de 0 a 100.
 - Abaixo de 1024px de largura a tabela vira uma lista de cards.
+
+Arquivar uma vaga vale para as duas abas: é o mesmo banco.
 
 ## Rodando local
 
@@ -87,8 +94,8 @@ reset, dos tokens e dos estados de `hover`.
 
 ## Editando os dados
 
-`src/data/vagas.js` exporta `VAGAS` (aba Vagas) e `VAGAS_BANCO` (aba Banco de
-Dados) como arrays literais. Cada item:
+`src/data/vagas.js` exporta `BANCO_DE_VAGAS`, um array literal — a base única
+que a aba Vagas consulta e a aba Banco de Dados lista. Cada item:
 
 ```js
 {
