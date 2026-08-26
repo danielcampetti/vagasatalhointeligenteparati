@@ -106,6 +106,34 @@ describe('instrução', () => {
     definirInstrucao('Pontue só por aderência técnica.')
     expect(lerCurriculo().instrucao).toBe('Pontue só por aderência técnica.')
   })
+
+  test('sobrevive a uma regravação do perfil', () => {
+    gravarExemplo()
+    definirInstrucao('Pontue só por aderência técnica.')
+    gravarCurriculo({
+      arquivo: { nome: 'cv2.pdf', tamanho: '90 KB', quando: '2026-08-27T12:00:00Z' },
+      texto: 'outro texto',
+      perfil: { ...PERFIL, senioridade: 'pleno' },
+    })
+    expect(lerCurriculo().instrucao).toBe('Pontue só por aderência técnica.')
+  })
+})
+
+describe('mutadores sem currículo gravado', () => {
+  test('corrigirPerfil não cria um currículo do nada', () => {
+    expect(corrigirPerfil('cidade', 'Bento Gonçalves, RS')).toBe(null)
+    expect(lerCurriculo()).toBe(null)
+  })
+
+  test('limparCorrecoes não cria um currículo do nada', () => {
+    expect(limparCorrecoes()).toBe(null)
+    expect(lerCurriculo()).toBe(null)
+  })
+
+  test('definirInstrucao não cria um currículo do nada', () => {
+    expect(definirInstrucao('Pontue só por aderência técnica.')).toBe(null)
+    expect(lerCurriculo()).toBe(null)
+  })
 })
 
 describe('remoção', () => {
