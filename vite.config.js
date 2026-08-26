@@ -23,7 +23,7 @@ function guardaDeChave({ nome, prefixo, chave, variavel }) {
         if (chave) return next()
         res.statusCode = 500
         res.setHeader('content-type', 'application/json; charset=utf-8')
-        res.setHeader('x-jsearch-proxy', 'sem-chave')
+        res.setHeader(`x-${nome}-proxy`, 'sem-chave')
         res.end(
           JSON.stringify({
             message: `${variavel} não encontrada. Copie .env.example para .env, cole sua chave e reinicie o npm run dev.`,
