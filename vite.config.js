@@ -104,7 +104,12 @@ export default defineConfig(({ mode }) => {
         [PREFIXO_CLAUDE]: {
           target: UPSTREAM_CLAUDE,
           changeOrigin: true,
-          rewrite: (caminho) => caminho.replace(PREFIXO_CLAUDE, '/v1'),
+          // O SDK já manda `/v1/messages` — a baseURL dele é a origem da
+          // própria página com `/api/claude` na frente (src/api/claude.js),
+          // então o pedido que chega aqui é `/api/claude/v1/messages`. Só
+          // tira o prefixo; não troca por '/v1', que duplicaria e viraria
+          // `/v1/v1/messages` -> 404 na Anthropic.
+          rewrite: (caminho) => caminho.replace(PREFIXO_CLAUDE, ''),
           configure: (proxy) => {
             proxy.on('proxyReq', (proxyReq) => {
               // Sobrescreve: o SDK manda uma chave falsa, a real entra aqui.

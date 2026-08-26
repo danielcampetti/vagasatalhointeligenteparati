@@ -1,9 +1,14 @@
 import Anthropic from '@anthropic-ai/sdk'
-import { beforeEach, describe, expect, test } from 'vitest'
-import { definirTeto, lerCusto, registrarChamada } from '../custo'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { PRECOS, definirTeto, lerCusto, registrarChamada } from '../custo'
+import configVite from '../../vite.config.js'
 import {
   ErroClaude,
   MODELO,
+  TIPOS,
+  chamarEstruturado,
+  chamarTexto,
+  claude,
   conferirResposta,
   conferirTeto,
   contabilizar,
@@ -11,6 +16,7 @@ import {
 } from './claude'
 
 beforeEach(() => localStorage.clear())
+afterEach(() => vi.restoreAllMocks())
 
 describe('conferirTeto', () => {
   test('passa quando está abaixo', () => {
@@ -20,7 +26,7 @@ describe('conferirTeto', () => {
   test('lança tipo "teto" quando estourou', () => {
     definirTeto(0.001)
     registrarChamada(
-      'ranking',
+      TIPOS.RANKING,
       { input_tokens: 1_000_000, output_tokens: 0 },
       MODELO,
     )
@@ -61,23 +67,189 @@ describe('conferirResposta', () => {
       expect(err.tipo).toBe('vazio')
     }
   })
+
+  test('lança quando a saída foi cortada por estourar a janela de contexto', () => {
+    // Mesmo efeito de max_tokens — saída pela metade — mas stop_reason
+    // diferente (model_context_window_exceeded). Plausível na Task 6, que
+    // manda um currículo em PDF inteiro para dentro do contexto.
+    try {
+      conferirResposta({
+        stop_reason: 'model_context_window_exceeded',
+        content: [],
+      })
+      throw new Error('devia ter lançado')
+    } catch (err) {
+      expect(err.tipo).toBe('vazio')
+    }
+  })
+
+  test('não lança em resposta ausente', () => {
+    expect(() => conferirResposta(undefined)).not.toThrow()
+  })
 })
 
 describe('contabilizar', () => {
   test('registra o uso no custo.js', () => {
-    contabilizar('perfil', {
+    contabilizar(TIPOS.PERFIL, {
       usage: { input_tokens: 100, output_tokens: 50 },
     })
     const chamada = lerCusto().chamadas[0]
-    expect(chamada).toMatchObject({ tipo: 'perfil', entrada: 100, saida: 50 })
+    expect(chamada).toMatchObject({
+      tipo: TIPOS.PERFIL,
+      entrada: 100,
+      saida: 50,
+    })
     expect(chamada.modelo).toBe(MODELO)
   })
 
   test('resposta sem usage não derruba, e não registra nada', () => {
-    expect(() => contabilizar('perfil', {})).not.toThrow()
+    expect(() => contabilizar(TIPOS.PERFIL, {})).not.toThrow()
     // Sem isto, uma resposta sem `usage` (ex.: depois de um erro) registraria
     // uma chamada fantasma de custo zero — o medidor mentiria por omissão.
     expect(lerCusto().chamadas).toEqual([])
+  })
+})
+
+describe('chamarEstruturado — invólucro (messages.parse)', () => {
+  test('conferirTeto bloqueia antes do SDK: estourado, o SDK nunca é chamado', async () => {
+    definirTeto(0.001)
+    registrarChamada(
+      TIPOS.RANKING,
+      { input_tokens: 1_000_000, output_tokens: 0 },
+      MODELO,
+    )
+    // mockImplementation que lança: se o guard de teto sumir e o SDK for
+    // chamado mesmo assim, o erro que vaza não é ErroClaude — a asserção de
+    // baixo falha alto e claro em vez de tentar uma rede de verdade.
+    const parseSpy = vi
+      .spyOn(claude.messages, 'parse')
+      .mockImplementation(() => {
+        throw new Error('não deveria ter chamado o SDK — teto devia bloquear antes')
+      })
+
+    await expect(
+      chamarEstruturado(TIPOS.PERFIL, { max_tokens: 100, messages: [] }),
+    ).rejects.toThrow(ErroClaude)
+    expect(parseSpy).not.toHaveBeenCalled()
+  })
+
+  test('injeta MODELO (mesmo se params tentar outro), contabiliza e devolve a resposta', async () => {
+    const respostaFake = {
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 10, output_tokens: 5 },
+      parsed_output: { ok: true },
+    }
+    const parseSpy = vi
+      .spyOn(claude.messages, 'parse')
+      .mockResolvedValue(respostaFake)
+
+    const resposta = await chamarEstruturado(TIPOS.PERFIL, {
+      max_tokens: 100,
+      messages: [{ role: 'user', content: 'oi' }],
+      model: 'modelo-que-o-chamador-não-deveria-poder-escolher',
+    })
+
+    expect(resposta).toBe(respostaFake)
+    expect(parseSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ model: MODELO, max_tokens: 100 }),
+    )
+    expect(lerCusto().chamadas[0]).toMatchObject({
+      tipo: TIPOS.PERFIL,
+      entrada: 10,
+      saida: 5,
+      modelo: MODELO,
+    })
+  })
+
+  test('uma recusa é contabilizada antes de lançar', async () => {
+    const respostaRecusa = {
+      stop_reason: 'refusal',
+      stop_details: { category: 'cyber', explanation: 'x' },
+      usage: { input_tokens: 20, output_tokens: 1 },
+    }
+    vi.spyOn(claude.messages, 'parse').mockResolvedValue(respostaRecusa)
+
+    await expect(
+      chamarEstruturado(TIPOS.PERFIL, { max_tokens: 100, messages: [] }),
+    ).rejects.toThrow(ErroClaude)
+
+    // A prova de ordem: mesmo com o throw, a chamada já está no livro-caixa.
+    // Se `contabilizar` viesse depois de `conferirResposta`, o throw a
+    // impediria de rodar e este array estaria vazio — o teto futuro ficaria
+    // sempre um pouco mentiroso.
+    expect(lerCusto().chamadas[0]).toMatchObject({
+      tipo: TIPOS.PERFIL,
+      entrada: 20,
+      saida: 1,
+    })
+  })
+})
+
+describe('chamarTexto — invólucro (messages.create)', () => {
+  test('conferirTeto bloqueia antes do SDK: estourado, o SDK nunca é chamado', async () => {
+    definirTeto(0.001)
+    registrarChamada(
+      TIPOS.RANKING,
+      { input_tokens: 1_000_000, output_tokens: 0 },
+      MODELO,
+    )
+    const createSpy = vi
+      .spyOn(claude.messages, 'create')
+      .mockImplementation(() => {
+        throw new Error('não deveria ter chamado o SDK — teto devia bloquear antes')
+      })
+
+    await expect(
+      chamarTexto(TIPOS.JUSTIFICATIVA, { max_tokens: 100, messages: [] }),
+    ).rejects.toThrow(ErroClaude)
+    expect(createSpy).not.toHaveBeenCalled()
+  })
+
+  test('injeta MODELO, contabiliza e devolve a resposta', async () => {
+    const respostaFake = {
+      stop_reason: 'end_turn',
+      usage: { input_tokens: 30, output_tokens: 15 },
+      content: [{ type: 'text', text: 'justificativa em prosa' }],
+    }
+    const createSpy = vi
+      .spyOn(claude.messages, 'create')
+      .mockResolvedValue(respostaFake)
+
+    const resposta = await chamarTexto(TIPOS.JUSTIFICATIVA, {
+      max_tokens: 2000,
+      messages: [{ role: 'user', content: 'oi' }],
+      model: 'modelo-que-o-chamador-não-deveria-poder-escolher',
+    })
+
+    expect(resposta).toBe(respostaFake)
+    expect(createSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ model: MODELO, max_tokens: 2000 }),
+    )
+    expect(lerCusto().chamadas[0]).toMatchObject({
+      tipo: TIPOS.JUSTIFICATIVA,
+      entrada: 30,
+      saida: 15,
+      modelo: MODELO,
+    })
+  })
+
+  test('uma recusa é contabilizada antes de lançar', async () => {
+    const respostaRecusa = {
+      stop_reason: 'refusal',
+      stop_details: { category: 'cyber', explanation: 'x' },
+      usage: { input_tokens: 40, output_tokens: 2 },
+    }
+    vi.spyOn(claude.messages, 'create').mockResolvedValue(respostaRecusa)
+
+    await expect(
+      chamarTexto(TIPOS.JUSTIFICATIVA, { max_tokens: 100, messages: [] }),
+    ).rejects.toThrow(ErroClaude)
+
+    expect(lerCusto().chamadas[0]).toMatchObject({
+      tipo: TIPOS.JUSTIFICATIVA,
+      entrada: 40,
+      saida: 2,
+    })
   })
 })
 
@@ -103,15 +275,35 @@ describe('mensagemDoErro', () => {
     expect(mensagemDoErro(err)).toMatch(/autoriza/i)
   })
 
-  test('400 vira mensagem que inclui o motivo original', () => {
-    // As duas asserções importam: a genérica de APIError (mais abaixo) *também*
-    // ecoa `err.message`, então só checar a presença do motivo não provaria
-    // que este `if` — e não o catch-all — respondeu. "recusou os parâmetros"
-    // só existe neste ramo.
-    const err = new Anthropic.BadRequestError(400, undefined, 'parâmetro inválido', undefined)
+  test('400 com corpo real da Anthropic extrai o motivo, sem JSON cru nem status duplicado', () => {
+    // Corpo real da Anthropic: {"type":"error","error":{"type":"...",
+    // "message":"..."}} — sem `.message` no topo. Passar `err.message` bruto
+    // (em vez do detalhe extraído) faz `APIError.makeMessage` cair em
+    // `JSON.stringify` do corpo inteiro, e o status aparece duas vezes (uma
+    // vez no "(400)" literal, outra dentro do `err.message` que o SDK já
+    // prefixa com o status). As fixtures anteriores usavam corpo `undefined`,
+    // que nunca ocorre em produção e escondia os dois problemas.
+    const err = new Anthropic.BadRequestError(
+      400,
+      {
+        type: 'error',
+        error: {
+          type: 'invalid_request_error',
+          message:
+            'max_tokens: 8000 > 4096, which is the maximum allowed number of output tokens for claude-opus-5',
+        },
+      },
+      undefined,
+      undefined,
+    )
     const msg = mensagemDoErro(err)
+    // "recusou os parâmetros" só existe neste ramo — o genérico de APIError,
+    // mais abaixo, também ecoaria o motivo, então essa frase é o que prova
+    // que foi ESTE `if` que respondeu, não o catch-all.
     expect(msg).toMatch(/recusou os parâmetros/)
-    expect(msg).toMatch(/parâmetro inválido/)
+    expect(msg).toMatch(/max_tokens: 8000 > 4096/)
+    expect(msg).not.toMatch(/[{}]/)
+    expect(msg.match(/400/g)).toHaveLength(1)
   })
 
   test('erro de conexão vira mensagem sobre o npm run dev', () => {
@@ -119,15 +311,24 @@ describe('mensagemDoErro', () => {
     expect(mensagemDoErro(err)).toMatch(/npm run dev/)
   })
 
-  test('status sem tratamento específico cai no genérico da API', () => {
-    // 500 não tem `if` próprio em mensagemDoErro — só bate no catch-all
-    // `instanceof Anthropic.APIError`. O catch-all final ("Erro inesperado:
-    // ...") também ecoaria status e mensagem, então a asserção precisa do
-    // prefixo "A Claude respondeu", que só o ramo `APIError` produz — sem
-    // ele não dá para distinguir "o ramo certo respondeu" de "caiu no
-    // catch-all errado".
-    const err = new Anthropic.InternalServerError(500, undefined, 'server exploded', undefined)
-    expect(mensagemDoErro(err)).toMatch(/^A Claude respondeu 500: .*server exploded/)
+  test('status sem tratamento específico cai no genérico, sem JSON cru nem status duplicado', () => {
+    // 500 não tem `if` próprio — só bate no catch-all `instanceof
+    // Anthropic.APIError`. O corpo real também não tem `.message` no topo,
+    // então o mesmo risco de JSON cru/status duplicado do teste de 400 vale
+    // aqui. O prefixo "A Claude respondeu" é o que prova que foi este ramo, e
+    // não o catch-all final ("Erro inesperado: ..."), que também ecoaria
+    // status e mensagem.
+    const err = new Anthropic.InternalServerError(
+      500,
+      { type: 'error', error: { type: 'api_error', message: 'Internal server error' } },
+      undefined,
+      undefined,
+    )
+    const msg = mensagemDoErro(err)
+    expect(msg).toMatch(/^A Claude respondeu 500: /)
+    expect(msg).toMatch(/Internal server error/)
+    expect(msg).not.toMatch(/[{}]/)
+    expect(msg.match(/500/g)).toHaveLength(1)
   })
 
   test('ErroClaude devolve a própria mensagem', () => {
@@ -137,5 +338,40 @@ describe('mensagemDoErro', () => {
 
   test('erro desconhecido não devolve undefined', () => {
     expect(mensagemDoErro(new Error('qualquer coisa'))).toBeTruthy()
+  })
+})
+
+describe('C-1 — baseURL absoluta e rewrite do proxy (regressão)', () => {
+  test('claude.buildURL não estoura e aponta pro caminho certo no proxy', () => {
+    // baseURL relativa ('/api/claude') faz `new URL(baseURL + path)`, de um
+    // argumento só (client.buildURL no SDK), estourar `TypeError: Invalid
+    // URL` antes de qualquer fetch sair — provado direto contra o pacote
+    // instalado antes de escrever este teste. Isto prova que a baseURL
+    // construída em claude.js é absoluta e resolve para o prefixo certo.
+    const url = claude.buildURL('/v1/messages')
+    expect(new URL(url).pathname).toBe('/api/claude/v1/messages')
+  })
+
+  test('o rewrite do proxy tira só o prefixo — o /v1 do SDK sobrevive', () => {
+    // Importa o vite.config.js de verdade (não uma reimplementação), para
+    // que uma regressão na linha do rewrite também derrube este teste. Só
+    // invoca a função de config e lê o `rewrite`; não sobe servidor, zero
+    // rede. O bug original: `.replace(PREFIXO_CLAUDE, '/v1')` trocava o
+    // prefixo por '/v1' em vez de tirá-lo, e `/api/claude/v1/messages`
+    // virava `/v1/v1/messages` — 404 na Anthropic.
+    const config = configVite({ mode: 'development' })
+    const rewrite = config.server.proxy['/api/claude'].rewrite
+    expect(rewrite('/api/claude/v1/messages')).toBe('/v1/messages')
+  })
+})
+
+describe('M-5 — MODELO tem preço cadastrado em custo.js', () => {
+  test('PRECOS[MODELO] existe', () => {
+    // Sem isto, um MODELO fora da tabela de custo.js faz `dolares()` somar
+    // sempre zero para essas chamadas (custo.js trata modelo desconhecido
+    // como US$ 0 de propósito, pra não derrubar a aba Controle) — e
+    // `conferirTeto`, que lê esse mesmo total, nunca prenderia nada. Em
+    // silêncio, sem exceção em lugar nenhum.
+    expect(PRECOS[MODELO]).toBeDefined()
   })
 })
