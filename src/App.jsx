@@ -1,11 +1,18 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { BANCO_DE_VAGAS, INSTRUCAO_PADRAO, MODALIDADES } from './data/vagas'
+import { CIDADES } from './data/cidades'
 import {
-  BANCO_DE_VAGAS,
-  CARGOS,
-  INSTRUCAO_PADRAO,
-  MODALIDADES,
-  STATUS,
-} from './data/vagas'
+  LIMITE_MENSAL,
+  consultarCache,
+  lerCota,
+  limparCache,
+  registrarUso,
+  servidasDoCache,
+  usadas,
+  zerarContagem,
+} from './cota'
+import { ErroJSearch, buscarVagas, montarConsulta, vagasDaResposta } from './api/jsearch'
+import { mapearVagas } from './api/mapear'
 
 /* ------------------------------------------------------------------ *
  * Protótipo frio: todo o estado vive em memória, nesta página.
@@ -16,26 +23,23 @@ const COLUNAS =
   'minmax(150px,1.45fr) minmax(108px,0.9fr) minmax(108px,0.9fr) 96px 112px 104px 76px 96px 34px'
 
 const TITULOS = {
-  vagas: ['Vagas', 'Busque no banco de vagas de TI'],
+  vagas: ['Vagas', 'Encontre vagas de TI por cargo e cidade'],
+  inteligente: [
+    'Vaga Inteligente',
+    'A IA lê seu currículo, escolhe o cargo e ranqueia as vagas',
+  ],
   banco: ['Banco de Dados', 'Histórico completo de vagas coletadas'],
   ia: ['Avaliação IA', 'Compatibilidade entre vagas e seu perfil'],
+  controle: ['Controle', 'Consumo da cota mensal da API de vagas'],
 }
 
 const ICONE_TITULO = {
   vagas: 'M3 9a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V9Zm6-2V5a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v2M3 12h18',
   banco: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3v12c0 1.7-3.6 3-8 3s-8-1.3-8-3V6Zm0 6c0 1.7 3.6 3 8 3s8-1.3 8-3',
   ia: 'M15.2 12a3.2 3.2 0 1 1-6.4 0 3.2 3.2 0 0 1 6.4 0ZM12 3.5v2.2M12 18.3v2.2M4.6 7.8l1.9 1.1M17.5 15.1l1.9 1.1M4.6 16.2l1.9-1.1M17.5 8.9l1.9-1.1',
-}
-
-const SELETOR = {
-  padding: '10px 12px',
-  borderRadius: 10,
-  border: '1px solid rgba(255,255,255,0.07)',
-  background: '#0B1220',
-  color: '#C8D1E0',
-  fontSize: 13.5,
-  outline: 'none',
-  cursor: 'pointer',
+  controle: 'M4 20V10M10 20V4M16 20v-7M22 20H2',
+  inteligente:
+    'M12 4.5v3M12 16.5v3M4.5 12h3M16.5 12h3M6.7 6.7l2.1 2.1M15.2 15.2l2.1 2.1M6.7 17.3l2.1-2.1M15.2 8.8l2.1-2.1',
 }
 
 const PILULA = {
@@ -115,20 +119,14 @@ const FORM_VAZIO = {
 
 /* ---------------------------- helpers ---------------------------- */
 
-/** Cor estável do "logo" da empresa, derivada do próprio nome. */
-function corDaEmpresa(nome) {
-  let h = 0
-  for (let i = 0; i < nome.length; i++) h = (h * 31 + nome.charCodeAt(i)) % 360
-  return `hsl(${h} 52% 34%)`
-}
-
-function iniciais(nome) {
-  const partes = nome
-    .replace(/[^A-Za-zÀ-ÿ ]/g, ' ')
-    .trim()
-    .split(/\s+/)
-  if (partes.length > 1) return (partes[0][0] + partes[1][0]).toUpperCase()
-  return partes[0].slice(0, 2).toLowerCase()
+/** "São Paulo, SP" -> "sao paulo, sp", para casar com o que se digita. */
+function semAcento(texto) {
+  return texto
+    .normalize('NFD')
+    // Faixa dos sinais diacríticos combinantes, escapada de propósito: os
+    // caracteres em si são invisíveis num editor.
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
 }
 
 /** 4.5 -> "4.500" */
@@ -139,6 +137,17 @@ function fmtMil(v) {
   })
 }
 
+/** ISO -> "25/08 14:02" ou "25/08/2026". Data inválida não quebra a tela. */
+function fmtDataHora(iso, comHora) {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  const p = (n) => String(n).padStart(2, '0')
+  const dia = `${p(d.getDate())}/${p(d.getMonth() + 1)}`
+  return comHora
+    ? `${dia} ${p(d.getHours())}:${p(d.getMinutes())}`
+    : `${dia}/${d.getFullYear()}`
+}
+
 /** Data de publicação = hoje menos `days`, para a lista nunca envelhecer. */
 function fmtData(dias) {
   const d = new Date()
@@ -147,7 +156,9 @@ function fmtData(dias) {
   return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()}`
 }
 
+/** Rank ausente não é rank baixo: a nota da IA ainda não existe. */
 function faixaDoRank(n) {
+  if (!Number.isFinite(n)) return { cor: '#4A5468', label: '—' }
   if (n >= 90) return { cor: '#22C55E', label: 'Excelente' }
   if (n >= 80) return { cor: '#22C55E', label: 'Muito bom' }
   if (n >= 70) return { cor: '#86EFAC', label: 'Bom' }
@@ -155,41 +166,101 @@ function faixaDoRank(n) {
   return { cor: '#FACC15', label: 'Baixo' }
 }
 
+/**
+ * A faixa como a API a entrega: às vezes só o mínimo, às vezes nada. Um campo
+ * vazio vira "—", nunca "R$ 0" — a vaga não paga zero, o anúncio é que não diz.
+ */
+function fmtSalario(min, max) {
+  const temMin = Number.isFinite(min) && min > 0
+  const temMax = Number.isFinite(max) && max > 0
+  if (temMin && temMax) return `R$ ${fmtMil(min)} – ${fmtMil(max)}`
+  if (temMin) return `A partir de R$ ${fmtMil(min)}`
+  if (temMax) return `Até R$ ${fmtMil(max)}`
+  return '—'
+}
+
+/**
+ * O título da vaga, abrindo a página de detalhe *dentro* do app.
+ *
+ * Já foi link externo direto e estava errado: expulsava o usuário para outro
+ * site na primeira interação com um resultado. O link para fora existe, mas na
+ * página de detalhe, depois de ele ver o que temos sobre a vaga.
+ *
+ * É um `<button>`, não um `<a>`: não há URL para onde apontar — o app não tem
+ * router. Fingir uma âncora daria menu de contexto e "abrir em nova aba" que
+ * não levariam a lugar nenhum.
+ */
+function TituloDaVaga({ vaga, onAbrir }) {
+  if (!vaga.cargo) return <span style={{ color: '#4A5468' }}>—</span>
+
+  return (
+    <button
+      onClick={(e) => {
+        // Sem isto o clique também alcança a linha e fecha/abre o menu.
+        e.stopPropagation()
+        onAbrir()
+      }}
+      title="Ver os detalhes desta vaga"
+      className="bg-transparent hover:text-[#93B4FD]"
+      style={{
+        padding: 0,
+        border: 'none',
+        font: 'inherit',
+        color: 'inherit',
+        textAlign: 'left',
+        cursor: 'pointer',
+      }}
+    >
+      {vaga.cargo}
+    </button>
+  )
+}
+
 /** Campos derivados usados tanto na tabela quanto nos cards. */
 function derivar(vaga) {
   const faixa = faixaDoRank(vaga.rank)
   const circunferencia = 2 * Math.PI * 17
+  const temDias = Number.isFinite(vaga.days)
+  const temRank = Number.isFinite(vaga.rank)
   return {
-    salario: `R$ ${fmtMil(vaga.min)} – ${fmtMil(vaga.max)}`,
-    data: fmtData(vaga.days),
-    desde:
-      vaga.days === 0
+    salario: fmtSalario(vaga.min, vaga.max),
+    data: temDias ? fmtData(vaga.days) : '—',
+    desde: !temDias
+      ? ''
+      : vaga.days === 0
         ? 'Hoje'
         : vaga.days === 1
           ? 'Há 1 dia'
           : `Há ${vaga.days} dias`,
+    temRank,
     rankCor: faixa.cor,
     rankLabel: faixa.label,
-    dash: `${((circunferencia * vaga.rank) / 100).toFixed(1)} ${circunferencia.toFixed(1)}`,
-    logoBg: corDaEmpresa(vaga.empresa),
-    logoTexto: iniciais(vaga.empresa),
+    dash: `${((circunferencia * (temRank ? vaga.rank : 0)) / 100).toFixed(1)} ${circunferencia.toFixed(1)}`,
     pontoCor: vaga.seen ? 'transparent' : '#3B82F6',
   }
 }
 
+/**
+ * Ordena tratando campo ausente como "vai para o fim", em qualquer direção.
+ * Sem isso, `null - 5` vira NaN e o sort embaralha a lista inteira.
+ */
 function ordenar(lista, chave, direcao) {
   const dir = direcao === 'asc' ? 1 : -1
+  const valor = (v) => {
+    if (chave === 'rank') return v.rank
+    if (chave === 'salario') return v.max
+    return -v.days // mais recente primeiro quando desc
+  }
   return lista.slice().sort((a, b) => {
-    if (chave === 'rank') return (a.rank - b.rank) * dir
-    if (chave === 'salario') return (a.max - b.max) * dir
-    return (b.days - a.days) * dir
+    const x = valor(a)
+    const y = valor(b)
+    const temX = Number.isFinite(x)
+    const temY = Number.isFinite(y)
+    if (!temX && !temY) return 0
+    if (!temX) return 1
+    if (!temY) return -1
+    return (x - y) * dir
   })
-}
-
-function unicos(lista, campo) {
-  return Array.from(new Set(lista.map((j) => j[campo]))).sort((a, b) =>
-    a.localeCompare(b, 'pt-BR'),
-  )
 }
 
 /* -------------------------- componentes -------------------------- */
@@ -354,6 +425,26 @@ function Lateral({ aba, onAba }) {
         </ItemNav>
 
         <ItemNav
+          ativo={aba === 'inteligente'}
+          onClick={() => onAba('inteligente')}
+          icone={
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+            >
+              <path d="M12 4.5v3M12 16.5v3M4.5 12h3M16.5 12h3M6.7 6.7l2.1 2.1M15.2 15.2l2.1 2.1M6.7 17.3l2.1-2.1M15.2 8.8l2.1-2.1" />
+              <circle cx="12" cy="12" r="3" />
+            </svg>
+          }
+        >
+          Vaga Inteligente
+        </ItemNav>
+
+        <ItemNav
           ativo={aba === 'banco'}
           onClick={() => onAba('banco')}
           icone={
@@ -392,6 +483,25 @@ function Lateral({ aba, onAba }) {
           }
         >
           Avaliação IA
+        </ItemNav>
+
+        <ItemNav
+          ativo={aba === 'controle'}
+          onClick={() => onAba('controle')}
+          icone={
+            <svg
+              width="18"
+              height="18"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+            >
+              <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" />
+            </svg>
+          }
+        >
+          Controle
         </ItemNav>
       </nav>
 
@@ -500,12 +610,7 @@ function Lateral({ aba, onAba }) {
   )
 }
 
-/**
- * `mostrarBusca` fica falso na aba Vagas: lá quem busca é o campo em
- * destaque do corpo da página, e dois campos de busca na mesma tela só
- * confundiriam.
- */
-function Cabecalho({ aba, busca, onBusca, mostrarBusca }) {
+function Cabecalho({ aba }) {
   const [titulo, subtitulo] = TITULOS[aba]
   const botaoIcone = {
     width: 38,
@@ -590,73 +695,6 @@ function Cabecalho({ aba, busca, onBusca, mostrarBusca }) {
           minWidth: 0,
         }}
       >
-        {mostrarBusca && (
-          <div
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: 9,
-              flex: '1 1 240px',
-              minWidth: 0,
-              maxWidth: 390,
-              padding: '10px 12px',
-              borderRadius: 10,
-              border: '1px solid rgba(255,255,255,0.07)',
-              background: '#0B1220',
-            }}
-          >
-            <svg
-              width="16"
-              height="16"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="#8A94A6"
-              strokeWidth="2"
-            >
-              <circle cx="11" cy="11" r="7" />
-              <path d="M16.5 16.5 21 21" />
-            </svg>
-            <input
-              value={busca}
-              onChange={onBusca}
-              placeholder="Buscar vaga, tecnologia ou empresa..."
-              style={{
-                flex: 1,
-                minWidth: 0,
-                background: 'transparent',
-                border: 'none',
-                outline: 'none',
-                color: '#E8ECF4',
-                fontSize: 13.5,
-              }}
-            />
-            <span
-              style={{ display: 'flex', gap: 4, color: '#6E7789', fontSize: 11 }}
-            >
-              <kbd
-                style={{
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: 5,
-                  padding: '2px 5px',
-                  fontFamily: 'inherit',
-                }}
-              >
-                ⌘
-              </kbd>
-              <kbd
-                style={{
-                  border: '1px solid rgba(255,255,255,0.1)',
-                  borderRadius: 5,
-                  padding: '2px 5px',
-                  fontFamily: 'inherit',
-                }}
-              >
-                K
-              </kbd>
-            </span>
-          </div>
-        )}
-
         <button
           className={classeBotaoIcone}
           style={{ ...botaoIcone, position: 'relative' }}
@@ -727,84 +765,403 @@ function Cabecalho({ aba, busca, onBusca, mostrarBusca }) {
   )
 }
 
-/** Campo de busca principal da aba Vagas. */
-function BuscaDestaque({ valor, onChange, onLimpar }) {
+/**
+ * Índice de busca das cidades, montado uma vez no carregamento do módulo.
+ *
+ * `sem` é o rótulo sem acento e em minúsculas. Sem isso, digitar "sao paulo"
+ * não acharia "São Paulo" — e como quase ninguém digita acento, o campo
+ * pareceria quebrado logo no caso mais óbvio.
+ */
+const CIDADES_INDEXADAS = CIDADES.map((rotulo) => ({
+  rotulo,
+  sem: semAcento(rotulo),
+  // O nome sem a UF, para reconhecer quem digitou a cidade inteira.
+  nomeSem: semAcento(rotulo.slice(0, rotulo.lastIndexOf(', '))),
+}))
+
+/** Quantas linhas o dropdown mostra por vez. "santa" casa com 199 cidades. */
+const TETO_SUGESTOES = 40
+
+/**
+ * Campo de cidade com filtro por digitação. Você digita, a lista se estreita,
+ * e escolher só é possível dentro dela — o texto digitado nunca vira valor.
+ *
+ * Substituiu um par de seletores em cascata (estado, depois cidade). Com 5.571
+ * municípios, rolar era inviável, e o `<select>` nativo só salta pela primeira
+ * letra: "cax" não levava a Caxias.
+ *
+ * Casa por trecho, não só por prefixo — "sul" encontra "Caxias do Sul" —, mas
+ * quem começa com o termo vem primeiro, senão "cax" enterraria Caxias sob
+ * qualquer município que só a contenha no meio do nome.
+ */
+function CampoCidade({ valor, onEscolher }) {
+  const [texto, setTexto] = useState('')
+  const [aberto, setAberto] = useState(false)
+  const [destaque, setDestaque] = useState(0)
+  const listaRef = useRef(null)
+
+  const termo = semAcento(texto.trim())
+
+  /*
+   * Três níveis de relevância, nesta ordem:
+   *
+   *   1. o nome inteiro é o que se digitou — "sao paulo" tem de pôr a capital
+   *      no topo, não "São Paulo das Missões", que vem antes no alfabeto;
+   *   2. começa com o termo — "cax" antes de quem só contém "cax" no meio;
+   *   3. contém o termo em qualquer posição — é o que faz "sul" achar
+   *      "Caxias do Sul".
+   *
+   * Varre as 5.571 a cada tecla, sem parar na metade: é uma comparação de
+   * string por item, abaixo de um milissegundo, e parar cedo faria a lista
+   * perder o casamento exato quando ele cai depois do teto.
+   */
+  const { lista: sugestoes, total } = useMemo(() => {
+    if (!termo) {
+      return {
+        lista: CIDADES_INDEXADAS.slice(0, TETO_SUGESTOES),
+        total: CIDADES_INDEXADAS.length,
+      }
+    }
+    const exatas = []
+    const comeca = []
+    const contem = []
+    for (const c of CIDADES_INDEXADAS) {
+      if (c.nomeSem === termo) exatas.push(c)
+      else if (c.sem.startsWith(termo)) comeca.push(c)
+      else if (c.sem.includes(termo)) contem.push(c)
+    }
+    const todas = [...exatas, ...comeca, ...contem]
+    return { lista: todas.slice(0, TETO_SUGESTOES), total: todas.length }
+  }, [termo])
+
+  // Mantém a linha destacada visível ao navegar pelo teclado.
+  useEffect(() => {
+    listaRef.current
+      ?.querySelector('[data-destacado="sim"]')
+      ?.scrollIntoView({ block: 'nearest' })
+  }, [destaque, aberto])
+
+  function escolher(rotulo) {
+    onEscolher(rotulo)
+    setTexto('')
+    setAberto(false)
+    setDestaque(0)
+  }
+
+  function aoTeclar(e) {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      e.preventDefault()
+      if (!aberto) return setAberto(true)
+      const passo = e.key === 'ArrowDown' ? 1 : -1
+      setDestaque((i) => {
+        const n = sugestoes.length
+        return n ? (i + passo + n) % n : 0
+      })
+    } else if (e.key === 'Enter') {
+      if (aberto && sugestoes[destaque]) {
+        e.preventDefault()
+        escolher(sugestoes[destaque].rotulo)
+      }
+    } else if (e.key === 'Escape') {
+      setAberto(false)
+      setTexto('')
+    }
+  }
+
   return (
     <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 12,
-        maxWidth: 680,
-        marginBottom: 14,
-        padding: '14px 16px',
-        borderRadius: 12,
-        border: `1px solid ${valor ? 'rgba(59,130,246,0.35)' : 'rgba(255,255,255,0.09)'}`,
-        background: '#0B1220',
+      style={{ position: 'relative', flex: '1 1 230px', minWidth: 0 }}
+      // Fecha ao clicar fora ou sair com Tab. O texto digitado é descartado:
+      // vale o que foi escolhido da lista, nunca o que ficou no campo.
+      onBlur={(e) => {
+        if (!e.currentTarget.contains(e.relatedTarget)) {
+          setAberto(false)
+          setTexto('')
+        }
       }}
     >
-      <svg
-        width="19"
-        height="19"
-        viewBox="0 0 24 24"
-        fill="none"
-        stroke="#60A5FA"
-        strokeWidth="1.9"
-        style={{ flex: '0 0 19px' }}
-      >
-        <circle cx="11" cy="11" r="7" />
-        <path d="M16.5 16.5 21 21" />
-      </svg>
-      <input
-        value={valor}
-        onChange={onChange}
-        autoFocus
-        placeholder="Busque por cargo, tecnologia ou empresa..."
-        style={{
-          flex: 1,
-          minWidth: 0,
-          background: 'transparent',
-          border: 'none',
-          outline: 'none',
-          color: '#E8ECF4',
-          fontSize: 15,
-        }}
-      />
-      {valor && (
-        <button
-          onClick={onLimpar}
-          aria-label="Limpar busca"
-          className="bg-transparent text-[#7C8699] hover:bg-white/[0.06] hover:text-[#E8ECF4]"
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+        <input
+          value={aberto ? texto : valor}
+          onChange={(e) => {
+            setTexto(e.target.value)
+            setAberto(true)
+            setDestaque(0)
+          }}
+          onFocus={() => setAberto(true)}
+          onKeyDown={aoTeclar}
+          placeholder="Digite a cidade..."
+          role="combobox"
+          aria-expanded={aberto}
+          aria-controls="lista-cidades"
+          aria-autocomplete="list"
+          aria-label="Cidade"
+          spellCheck={false}
+          autoComplete="off"
           style={{
-            flex: '0 0 26px',
-            width: 26,
-            height: 26,
-            borderRadius: 7,
+            flex: 1,
+            minWidth: 0,
+            background: '#0B1220',
             border: 'none',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
+            outline: 'none',
+            color: valor || texto ? '#E8ECF4' : '#8A94A6',
+            fontSize: 15,
+          }}
+        />
+        {valor && !aberto && (
+          <button
+            onClick={() => onEscolher('')}
+            aria-label="Limpar cidade"
+            className="bg-transparent text-[#7C8699] hover:bg-white/[0.06] hover:text-[#E8ECF4]"
+            style={{
+              flex: '0 0 22px',
+              width: 22,
+              height: 22,
+              borderRadius: 6,
+              border: 'none',
+              cursor: 'pointer',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            }}
+          >
+            <svg
+              width="12"
+              height="12"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+            >
+              <path d="M6 6l12 12M18 6L6 18" />
+            </svg>
+          </button>
+        )}
+      </div>
+
+      {aberto && (
+        <div
+          id="lista-cidades"
+          role="listbox"
+          ref={listaRef}
+          style={{
+            position: 'absolute',
+            top: 'calc(100% + 10px)',
+            left: -8,
+            right: -8,
+            zIndex: 30,
+            maxHeight: 280,
+            overflowY: 'auto',
+            borderRadius: 10,
+            border: '1px solid rgba(255,255,255,0.1)',
+            background: '#0E1729',
+            boxShadow: '0 16px 40px rgba(0,0,0,0.5)',
+            padding: 4,
           }}
         >
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-          >
-            <path d="M6 6l12 12M18 6L6 18" />
-          </svg>
-        </button>
+          {sugestoes.length === 0 ? (
+            <div
+              style={{ padding: '12px 10px', fontSize: 13, color: '#8A94A6' }}
+            >
+              Nenhuma cidade com “{texto.trim()}”.
+            </div>
+          ) : (
+            <>
+              {sugestoes.map((c, i) => (
+                <div
+                  key={c.rotulo}
+                  role="option"
+                  aria-selected={i === destaque}
+                  data-destacado={i === destaque ? 'sim' : 'nao'}
+                  // Sem isto o campo perde o foco antes do clique registrar.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={() => escolher(c.rotulo)}
+                  onMouseEnter={() => setDestaque(i)}
+                  style={{
+                    padding: '8px 10px',
+                    borderRadius: 7,
+                    fontSize: 13.5,
+                    cursor: 'pointer',
+                    color: i === destaque ? '#E8ECF4' : '#C8D1E0',
+                    background:
+                      i === destaque ? 'rgba(37,99,235,0.22)' : 'transparent',
+                  }}
+                >
+                  {c.rotulo}
+                </div>
+              ))}
+              {total > sugestoes.length && (
+                <div
+                  style={{
+                    padding: '8px 10px 6px',
+                    fontSize: 12,
+                    color: '#6E7789',
+                  }}
+                >
+                  e mais {total - sugestoes.length} — refine o texto
+                </div>
+              )}
+            </>
+          )}
+        </div>
       )}
     </div>
   )
 }
 
-/** Estado da aba Vagas enquanto não há busca nem filtro aplicado. */
-function EsperaBusca({ total }) {
+/**
+ * Bloco de consulta da aba Vagas: cargo, cidade e o botão Buscar.
+ *
+ * Os dois campos se comportam de formas diferentes de propósito. O cargo é
+ * texto livre — é o termo que vai para a API, e uma API de vagas recebe texto.
+ * A cidade é lista fechada, porque localização errada não devolve resultado
+ * ruim, devolve resultado nenhum.
+ *
+ * Ambos são *deferidos*: digitar altera só o rascunho, e a tabela muda quando
+ * `onBuscar` promove o rascunho para os critérios da consulta. É a forma que a
+ * busca vai precisar ter quando o clique disparar uma API — assíncrona, com
+ * carregamento e erro.
+ *
+ * É o único controle da tela: não há filtro nenhum sobre o resultado. A aba
+ * Banco de Dados não tem este bloco — ela lista o acervo direto.
+ */
+function ConsultaDestaque({
+  cargo,
+  cidade,
+  onCargo,
+  onCidade,
+  onBuscar,
+  pendente,
+  buscando,
+}) {
+  return (
+    <div style={{ maxWidth: 860, marginBottom: 14 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          flexWrap: 'wrap',
+          padding: '14px 16px',
+          borderRadius: 12,
+          border: `1px solid ${cargo || cidade ? 'rgba(59,130,246,0.35)' : 'rgba(255,255,255,0.09)'}`,
+          background: '#0B1220',
+        }}
+      >
+        <svg
+          width="19"
+          height="19"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#60A5FA"
+          strokeWidth="1.9"
+          style={{ flex: '0 0 19px' }}
+        >
+          <circle cx="11" cy="11" r="7" />
+          <path d="M16.5 16.5 21 21" />
+        </svg>
+
+        <input
+          value={cargo}
+          onChange={onCargo}
+          // Enter num campo de busca dispara a busca — é o que qualquer um
+          // espera. No campo de cidade, Enter escolhe a sugestão destacada.
+          onKeyDown={(e) => e.key === 'Enter' && onBuscar()}
+          placeholder="Digite o cargo..."
+          aria-label="Cargo"
+          // Nome de cargo não é prosa: o corretor sublinharia metade dos
+          // termos técnicos, e o autocompletar do navegador ofereceria o
+          // histórico de outros formulários.
+          spellCheck={false}
+          autoComplete="off"
+          style={{
+            flex: '1 1 200px',
+            minWidth: 0,
+            background: '#0B1220',
+            border: 'none',
+            outline: 'none',
+            color: cargo ? '#E8ECF4' : '#8A94A6',
+            fontSize: 15,
+          }}
+        />
+
+        <span
+          aria-hidden="true"
+          style={{
+            flex: '0 0 1px',
+            alignSelf: 'stretch',
+            background: 'rgba(255,255,255,0.08)',
+          }}
+        />
+
+        <CampoCidade valor={cidade} onEscolher={onCidade} />
+
+        <button
+          onClick={onBuscar}
+          disabled={buscando}
+          className={buscando ? 'bg-[#2A3B5E]' : 'bg-[#2563EB] hover:bg-[#1D4FD8]'}
+          style={{
+            flex: '0 0 auto',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            padding: '10px 20px',
+            borderRadius: 9,
+            border: 'none',
+            color: '#fff',
+            fontSize: 13.5,
+            fontWeight: 600,
+            cursor: buscando ? 'wait' : 'pointer',
+          }}
+        >
+          <svg
+            width="15"
+            height="15"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.1"
+          >
+            <circle cx="11" cy="11" r="7" />
+            <path d="M16.5 16.5 21 21" />
+          </svg>
+          {buscando ? 'Buscando...' : 'Buscar'}
+        </button>
+      </div>
+
+      {/* Sem este aviso o modelo deferido engana: troca-se a cidade, a tabela
+          não mexe, e a tela parece quebrada. */}
+      {pendente && (
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            marginTop: 8,
+            fontSize: 12.5,
+            color: '#D9A441',
+          }}
+        >
+          <svg
+            width="13"
+            height="13"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7.5v5M12 16h.01" />
+          </svg>
+          Critérios alterados — clique em Buscar para aplicar.
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Estado da aba Vagas enquanto nenhum cargo ou filtro foi escolhido. */
+function EsperaBusca() {
   return (
     <div
       style={{
@@ -845,7 +1202,7 @@ function EsperaBusca({ total }) {
         </svg>
       </div>
       <div style={{ fontSize: 16, fontWeight: 600 }}>
-        Busque no banco de vagas
+        Informe os critérios e clique em Buscar
       </div>
       <div
         style={{
@@ -856,125 +1213,10 @@ function EsperaBusca({ total }) {
           lineHeight: 1.6,
         }}
       >
-        {total} vagas disponíveis para consulta. Digite um cargo, tecnologia ou
-        empresa — ou use os filtros acima.
+        Informe o cargo e a cidade acima e clique em Buscar. A consulta vai à
+        API de vagas e consome uma das 200 requisições do mês — repetir uma
+        busca já feita sai do cache, sem custo.
       </div>
-    </div>
-  )
-}
-
-function Filtros({
-  cargo,
-  empresa,
-  cidade,
-  modalidade,
-  status,
-  empresas,
-  cidades,
-  onCargo,
-  onEmpresa,
-  onCidade,
-  onModalidade,
-  onStatus,
-  onLimpar,
-}) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        gap: 10,
-        flexWrap: 'wrap',
-        marginBottom: 16,
-      }}
-    >
-      <select value={cargo} onChange={onCargo} style={{ ...SELETOR, width: 250 }}>
-        <option value="">Todos os cargos</option>
-        {CARGOS.map((c) => (
-          <option key={c} value={c}>
-            {c}
-          </option>
-        ))}
-      </select>
-
-      <select
-        value={empresa}
-        onChange={onEmpresa}
-        style={{ ...SELETOR, width: 215 }}
-      >
-        <option value="">Todas as empresas</option>
-        {empresas.map((e) => (
-          <option key={e} value={e}>
-            {e}
-          </option>
-        ))}
-      </select>
-
-      <select
-        value={cidade}
-        onChange={onCidade}
-        style={{ ...SELETOR, width: 195 }}
-      >
-        <option value="">Todas as cidades</option>
-        {cidades.map((c) => (
-          <option key={c} value={c}>
-            {c}
-          </option>
-        ))}
-      </select>
-
-      <select
-        value={modalidade}
-        onChange={onModalidade}
-        style={{ ...SELETOR, width: 195 }}
-      >
-        <option value="">Todas as modalidades</option>
-        {MODALIDADES.map((m) => (
-          <option key={m} value={m}>
-            {m}
-          </option>
-        ))}
-      </select>
-
-      <select
-        value={status}
-        onChange={onStatus}
-        style={{ ...SELETOR, width: 200 }}
-      >
-        <option value="">Todos os status</option>
-        {STATUS.map((s) => (
-          <option key={s} value={s}>
-            {s}
-          </option>
-        ))}
-      </select>
-
-      <button
-        onClick={onLimpar}
-        className="bg-[#0B1220] text-[#C8D1E0] hover:bg-[#111A2B]"
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 8,
-          padding: '10px 14px',
-          borderRadius: 10,
-          border: '1px solid rgba(255,255,255,0.09)',
-          fontSize: 13.5,
-          cursor: 'pointer',
-        }}
-      >
-        <svg
-          width="15"
-          height="15"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="1.9"
-        >
-          <path d="M4 7h16M7 12h10M10 17h4" />
-        </svg>
-        Filtros
-      </button>
     </div>
   )
 }
@@ -1076,7 +1318,7 @@ function CabecalhoTabela({
   )
 }
 
-function Linha({ vaga, menuAberto, onMenu, onDetalhes, onFavorito, onArquivar }) {
+function Linha({ vaga, menuAberto, onMenu, onAbrir, onFavorito, onArquivar }) {
   const d = derivar(vaga)
   const itemMenu = {
     width: '100%',
@@ -1126,7 +1368,7 @@ function Linha({ vaga, menuAberto, onMenu, onDetalhes, onFavorito, onArquivar })
             lineHeight: 1.3,
           }}
         >
-          {vaga.cargo}
+          <TituloDaVaga vaga={vaga} onAbrir={onAbrir} />
         </div>
         <div
           style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 5 }}
@@ -1142,24 +1384,9 @@ function Linha({ vaga, menuAberto, onMenu, onDetalhes, onFavorito, onArquivar })
       <div
         style={{ display: 'flex', alignItems: 'center', gap: 9, minWidth: 0 }}
       >
-        <div
-          style={{
-            width: 30,
-            height: 30,
-            flex: '0 0 30px',
-            borderRadius: 7,
-            background: d.logoBg,
-            color: '#fff',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: 11.5,
-            fontWeight: 700,
-          }}
-        >
-          {d.logoTexto}
-        </div>
-        <span style={{ fontSize: 13.5, color: '#D3DAE6' }}>{vaga.empresa}</span>
+        <span style={{ fontSize: 13.5, color: '#D3DAE6' }}>
+          {vaga.empresa ?? <span style={{ color: '#4A5468' }}>—</span>}
+        </span>
       </div>
 
       <div>
@@ -1183,7 +1410,7 @@ function Linha({ vaga, menuAberto, onMenu, onDetalhes, onFavorito, onArquivar })
             <path d="M12 21s7-5.5 7-11a7 7 0 1 0-14 0c0 5.5 7 11 7 11Z" />
             <circle cx="12" cy="10" r="2.4" />
           </svg>
-          {vaga.cidade}
+          {vaga.cidade ?? <span style={{ color: '#4A5468' }}>—</span>}
         </div>
         <div
           style={{
@@ -1198,7 +1425,13 @@ function Linha({ vaga, menuAberto, onMenu, onDetalhes, onFavorito, onArquivar })
       </div>
 
       <div>
-        <span style={ESTILO_MODALIDADE[vaga.modalidade]}>{vaga.modalidade}</span>
+        {vaga.modalidade ? (
+          <span style={ESTILO_MODALIDADE[vaga.modalidade]}>
+            {vaga.modalidade}
+          </span>
+        ) : (
+          <span style={{ color: '#4A5468' }}>—</span>
+        )}
       </div>
 
       <div>
@@ -1221,18 +1454,29 @@ function Linha({ vaga, menuAberto, onMenu, onDetalhes, onFavorito, onArquivar })
           gap: 3,
         }}
       >
-        <Rosca
-          tamanho={42}
-          rank={vaga.rank}
-          cor={d.rankCor}
-          dash={d.dash}
-          fontSize={13}
-        />
-        <div style={{ fontSize: 10.5, color: d.rankCor }}>{d.rankLabel}</div>
+        {d.temRank ? (
+          <>
+            <Rosca
+              tamanho={42}
+              rank={vaga.rank}
+              cor={d.rankCor}
+              dash={d.dash}
+              fontSize={13}
+            />
+            <div style={{ fontSize: 10.5, color: d.rankCor }}>{d.rankLabel}</div>
+          </>
+        ) : (
+          // Rosca vazia enganaria: pareceria nota zero, não nota ausente.
+          <span style={{ color: '#4A5468', fontSize: 15 }}>—</span>
+        )}
       </div>
 
       <div>
-        <span style={ESTILO_STATUS[vaga.status]}>{vaga.status}</span>
+        {vaga.status ? (
+          <span style={ESTILO_STATUS[vaga.status]}>{vaga.status}</span>
+        ) : (
+          <span style={{ color: '#4A5468' }}>—</span>
+        )}
       </div>
 
       <div
@@ -1279,7 +1523,7 @@ function Linha({ vaga, menuAberto, onMenu, onDetalhes, onFavorito, onArquivar })
             }}
           >
             <button
-              onClick={onDetalhes}
+              onClick={onAbrir}
               className={classeItemMenu}
               style={itemMenu}
             >
@@ -1306,7 +1550,7 @@ function Linha({ vaga, menuAberto, onMenu, onDetalhes, onFavorito, onArquivar })
   )
 }
 
-function Card({ vaga }) {
+function Card({ vaga, onAbrir }) {
   const d = derivar(vaga)
   return (
     <div
@@ -1328,7 +1572,9 @@ function Card({ vaga }) {
               background: d.pontoCor,
             }}
           />
-          <div style={{ fontSize: 14.5, fontWeight: 600 }}>{vaga.cargo}</div>
+          <div style={{ fontSize: 14.5, fontWeight: 600 }}>
+            <TituloDaVaga vaga={vaga} onAbrir={onAbrir} />
+          </div>
         </div>
         <div
           style={{
@@ -1338,25 +1584,11 @@ function Card({ vaga }) {
             marginTop: 8,
           }}
         >
-          <div
-            style={{
-              width: 24,
-              height: 24,
-              borderRadius: 6,
-              background: d.logoBg,
-              color: '#fff',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: 10,
-              fontWeight: 700,
-            }}
-          >
-            {d.logoTexto}
-          </div>
-          <span style={{ fontSize: 13, color: '#D3DAE6' }}>{vaga.empresa}</span>
+          <span style={{ fontSize: 13, color: '#D3DAE6' }}>
+            {vaga.empresa ?? <span style={{ color: '#4A5468' }}>—</span>}
+          </span>
           <span style={{ fontSize: 12.5, color: '#7C8699' }}>
-            · {vaga.cidade}
+            · {vaga.cidade ?? '—'}
           </span>
         </div>
         <div
@@ -1368,12 +1600,18 @@ function Card({ vaga }) {
             flexWrap: 'wrap',
           }}
         >
-          <span style={ESTILO_MODALIDADE[vaga.modalidade]}>
-            {vaga.modalidade}
-          </span>
-          <span style={ESTILO_STATUS[vaga.status]}>{vaga.status}</span>
+          {vaga.modalidade && (
+            <span style={ESTILO_MODALIDADE[vaga.modalidade]}>
+              {vaga.modalidade}
+            </span>
+          )}
+          {vaga.status && (
+            <span style={ESTILO_STATUS[vaga.status]}>{vaga.status}</span>
+          )}
           <span style={{ fontSize: 12.5, color: '#D3DAE6' }}>{d.salario}</span>
-          <span style={{ fontSize: 12, color: '#7C8699' }}>{d.desde}</span>
+          {d.desde && (
+            <span style={{ fontSize: 12, color: '#7C8699' }}>{d.desde}</span>
+          )}
         </div>
       </div>
       <div
@@ -1384,20 +1622,31 @@ function Card({ vaga }) {
           gap: 2,
         }}
       >
-        <Rosca
-          tamanho={40}
-          rank={vaga.rank}
-          cor={d.rankCor}
-          dash={d.dash}
-          fontSize={12.5}
-        />
-        <div style={{ fontSize: 10, color: d.rankCor }}>{d.rankLabel}</div>
+        {d.temRank ? (
+          <>
+            <Rosca
+              tamanho={40}
+              rank={vaga.rank}
+              cor={d.rankCor}
+              dash={d.dash}
+              fontSize={12.5}
+            />
+            <div style={{ fontSize: 10, color: d.rankCor }}>{d.rankLabel}</div>
+          </>
+        ) : (
+          <span style={{ color: '#4A5468', fontSize: 15 }}>—</span>
+        )}
       </div>
     </div>
   )
 }
 
-function SemResultados({ onLimpar }) {
+/**
+ * Com o banco vazio, este é o estado normal da tela — não uma exceção. O texto
+ * precisa dizer *por que* está vazio, senão parece defeito: hoje é porque não
+ * há fonte de vagas ligada, e não porque a consulta não achou nada.
+ */
+function SemResultados({ cidade }) {
   return (
     <div
       style={{
@@ -1432,33 +1681,22 @@ function SemResultados({ onLimpar }) {
           <path d="M16.5 16.5 21 21" />
         </svg>
       </div>
-      <div style={{ fontSize: 15, fontWeight: 600 }}>Nenhuma vaga encontrada</div>
+      <div style={{ fontSize: 15, fontWeight: 600 }}>
+        {cidade ? `Nenhuma vaga em ${cidade}` : 'Nenhuma vaga encontrada'}
+      </div>
       <div
         style={{
           fontSize: 13,
           color: '#8A94A6',
           textAlign: 'center',
-          maxWidth: 320,
+          maxWidth: 380,
+          lineHeight: 1.6,
         }}
       >
-        Tente outros termos ou remova alguns filtros para ver mais resultados.
+        A API não devolveu resultados para esta consulta. Tente outro cargo ou
+        outra cidade — e lembre que cada nova consulta consome uma das 200
+        requisições do mês, enquanto repetir uma já feita sai do cache.
       </div>
-      <button
-        onClick={onLimpar}
-        className="bg-[rgba(37,99,235,0.12)] hover:bg-[rgba(37,99,235,0.2)]"
-        style={{
-          marginTop: 4,
-          padding: '9px 16px',
-          borderRadius: 9,
-          border: '1px solid rgba(59,130,246,0.4)',
-          color: '#93B4FD',
-          fontSize: 13,
-          fontWeight: 600,
-          cursor: 'pointer',
-        }}
-      >
-        Limpar filtros
-      </button>
     </div>
   )
 }
@@ -1978,7 +2216,7 @@ function ModalNovaVaga({ form, onCampo, onFechar, onSalvar }) {
             <input
               value={form.cidade}
               onChange={(e) => onCampo('cidade', e.target.value)}
-              placeholder="São Paulo, SP"
+              placeholder="Caxias do Sul, RS"
               style={CAMPO_MODAL}
             />
           </label>
@@ -2073,6 +2311,820 @@ function ModalNovaVaga({ form, onCampo, onFechar, onSalvar }) {
   )
 }
 
+/**
+ * A vaga por inteiro. Ocupa o lugar da tabela em vez de virar modal: é a
+ * descrição completa do anúncio, texto longo que pede a largura da página.
+ *
+ * Aqui — e só aqui — mora o link externo. O título na listagem levava direto
+ * para fora do app, o que expulsava o usuário na primeira interação; agora ele
+ * chega primeiro ao que já sabemos da vaga, e sai para o anúncio original se
+ * quiser mesmo se candidatar.
+ */
+function PaginaVaga({ vaga, onVoltar }) {
+  const d = derivar(vaga)
+
+  const cartao = {
+    border: '1px solid rgba(255,255,255,0.07)',
+    background: '#0B1220',
+    borderRadius: 12,
+    padding: 22,
+  }
+  const legenda = {
+    fontSize: 11,
+    fontWeight: 600,
+    letterSpacing: '0.09em',
+    textTransform: 'uppercase',
+    color: '#7C8699',
+    marginBottom: 6,
+  }
+  const valor = { fontSize: 14, color: '#D3DAE6' }
+  const vazio = <span style={{ color: '#4A5468' }}>—</span>
+
+  const dados = [
+    ['Empresa', vaga.empresa],
+    ['Localização', vaga.cidade],
+    ['Salário', d.salario === '—' ? null : d.salario],
+    ['Publicada', d.desde ? `${d.data} · ${d.desde}` : null],
+  ]
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+        maxWidth: 880,
+      }}
+    >
+      <button
+        onClick={onVoltar}
+        className="bg-transparent text-[#9AA5B8] hover:text-[#E8ECF4]"
+        style={{
+          alignSelf: 'flex-start',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 7,
+          padding: '6px 2px',
+          border: 'none',
+          fontSize: 13.5,
+          cursor: 'pointer',
+        }}
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+        >
+          <path d="M15 5l-7 7 7 7" />
+        </svg>
+        Voltar aos resultados
+      </button>
+
+      <div style={cartao}>
+        <h2
+          style={{
+            margin: 0,
+            fontSize: 22,
+            fontWeight: 600,
+            letterSpacing: '-0.01em',
+            lineHeight: 1.3,
+          }}
+        >
+          {vaga.cargo ?? vazio}
+        </h2>
+
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            flexWrap: 'wrap',
+            marginTop: 12,
+          }}
+        >
+          {vaga.modalidade && (
+            <span style={ESTILO_MODALIDADE[vaga.modalidade]}>
+              {vaga.modalidade}
+            </span>
+          )}
+          {vaga.status && (
+            <span style={ESTILO_STATUS[vaga.status]}>{vaga.status}</span>
+          )}
+          {d.temRank ? (
+            <span style={{ fontSize: 13, color: d.rankCor }}>
+              Rank IA {vaga.rank} · {d.rankLabel}
+            </span>
+          ) : (
+            <span style={{ fontSize: 13, color: '#6E7789' }}>
+              Rank IA — a comparação com o currículo ainda não roda
+            </span>
+          )}
+        </div>
+
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))',
+            gap: 18,
+            marginTop: 22,
+            paddingTop: 20,
+            borderTop: '1px solid rgba(255,255,255,0.06)',
+          }}
+        >
+          {dados.map(([rotulo, conteudo]) => (
+            <div key={rotulo}>
+              <div style={legenda}>{rotulo}</div>
+              <div style={valor}>{conteudo ?? vazio}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={cartao}>
+        <div style={legenda}>Descrição da vaga</div>
+        {vaga.descricao ? (
+          <p
+            style={{
+              margin: 0,
+              fontSize: 14,
+              color: '#C8D1E0',
+              lineHeight: 1.75,
+              // A API devolve texto corrido com quebras de linha; preservá-las
+              // é o que separa parágrafos de um bloco ilegível.
+              whiteSpace: 'pre-wrap',
+            }}
+          >
+            {vaga.descricao}
+          </p>
+        ) : (
+          <p style={{ margin: 0, fontSize: 13.5, color: '#7C8699' }}>
+            Este anúncio veio sem descrição. Acontece: nem todo publicador
+            preenche o campo, e a API repassa o que recebeu.
+          </p>
+        )}
+      </div>
+
+      {vaga.link ? (
+        <a
+          href={vaga.link}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="bg-[#2563EB] hover:bg-[#1D4FD8]"
+          style={{
+            alignSelf: 'flex-start',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 9,
+            padding: '12px 22px',
+            borderRadius: 10,
+            color: '#fff',
+            fontSize: 14,
+            fontWeight: 600,
+            textDecoration: 'none',
+          }}
+        >
+          Ver vaga no site original
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2.2"
+          >
+            <path d="M14 4h6v6M20 4l-8.5 8.5" />
+            <path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+          </svg>
+        </a>
+      ) : (
+        <div style={{ fontSize: 13, color: '#7C8699' }}>
+          Esta vaga veio sem link de candidatura — nem `job_apply_link` nem
+          `apply_options`. Não há para onde mandar o candidato.
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Aba Vaga Inteligente: a busca que o aluno não precisa saber formular.
+ *
+ * O mecanismo previsto, quando as três integrações existirem:
+ *
+ *   1. a Claude API lê o currículo e deduz o cargo — o aluno informa só a cidade
+ *   2. a JSearch busca por (cargo deduzido + cidade)
+ *   3. a Claude API compara cada vaga com o currículo e dá uma nota
+ *   4. a lista volta ordenada por compatibilidade
+ *
+ * Nada disso está ligado. Este painel é a casca: os estados, a ordem das
+ * etapas e o lugar de cada resultado. O que ele faz de verdade hoje é registrar
+ * a busca na cota — porque o passo 2 gasta uma das 200 requisições do mês, e
+ * essa conta precisa existir desde já.
+ *
+ * O currículo é o mesmo da aba Avaliação IA: um só no app inteiro. Sem CV
+ * enviado, esta aba não tem o que fazer e manda o aluno para lá.
+ */
+function PainelVagaInteligente({
+  cv,
+  cidade,
+  onCidade,
+  buscando,
+  buscaFeita,
+  bancoVazio,
+  onBuscar,
+  onIrParaCurriculo,
+}) {
+  const cartao = {
+    border: '1px solid rgba(255,255,255,0.07)',
+    background: '#0B1220',
+    borderRadius: 12,
+    padding: 20,
+  }
+  const legenda = {
+    fontSize: 11.5,
+    fontWeight: 600,
+    letterSpacing: '0.09em',
+    textTransform: 'uppercase',
+    color: '#7C8699',
+  }
+
+  // Sem currículo não há o que deduzir nem com o que comparar: metade do
+  // mecanismo depende dele.
+  if (!cv) {
+    return (
+      <div
+        style={{
+          ...cartao,
+          maxWidth: 880,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 14,
+          padding: '72px 24px',
+          textAlign: 'center',
+        }}
+      >
+        <div
+          style={{
+            width: 56,
+            height: 56,
+            borderRadius: 16,
+            border: '1px solid rgba(139,92,246,0.28)',
+            background: 'rgba(139,92,246,0.12)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          <svg
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#A78BFA"
+            strokeWidth="1.6"
+          >
+            <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8Z" />
+            <path d="M14 3v5h5M9 13h6M9 17h4" />
+          </svg>
+        </div>
+        <div style={{ fontSize: 16, fontWeight: 600 }}>
+          Envie seu currículo para começar
+        </div>
+        <div
+          style={{
+            fontSize: 13.5,
+            color: '#8A94A6',
+            maxWidth: 400,
+            lineHeight: 1.6,
+          }}
+        >
+          A busca inteligente parte do currículo: é dele que a IA deduz o cargo
+          e é contra ele que cada vaga é comparada. O envio fica na aba
+          Avaliação IA — o mesmo currículo vale para as duas.
+        </div>
+        <button
+          onClick={onIrParaCurriculo}
+          className="bg-[rgba(139,92,246,0.14)] hover:bg-[rgba(139,92,246,0.22)]"
+          style={{
+            marginTop: 4,
+            padding: '10px 18px',
+            borderRadius: 9,
+            border: '1px solid rgba(167,139,250,0.42)',
+            color: '#C4B5FD',
+            fontSize: 13.5,
+            fontWeight: 600,
+            cursor: 'pointer',
+          }}
+        >
+          Ir para Avaliação IA
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+        maxWidth: 880,
+      }}
+    >
+      <div
+        style={{
+          ...cartao,
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          padding: '14px 18px',
+        }}
+      >
+        <svg
+          width="17"
+          height="17"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#4ADE80"
+          strokeWidth="2.2"
+          style={{ flex: '0 0 17px' }}
+        >
+          <path d="M4 12.5l5 5L20 6.5" />
+        </svg>
+        <span style={{ fontSize: 13.5, color: '#D3DAE6' }}>
+          Currículo: <strong style={{ fontWeight: 600 }}>{cv.nome}</strong>
+        </span>
+        <span style={{ fontSize: 12.5, color: '#7C8699' }}>{cv.tamanho}</span>
+      </div>
+
+      <div style={cartao}>
+        <div style={{ ...legenda, marginBottom: 12 }}>
+          Onde você quer trabalhar
+        </div>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 12,
+            flexWrap: 'wrap',
+            padding: '12px 14px',
+            borderRadius: 10,
+            border: `1px solid ${cidade ? 'rgba(139,92,246,0.35)' : 'rgba(255,255,255,0.09)'}`,
+            background: '#0E1729',
+          }}
+        >
+          <svg
+            width="18"
+            height="18"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="#A78BFA"
+            strokeWidth="1.9"
+            style={{ flex: '0 0 18px' }}
+          >
+            <path d="M12 21s7-5.6 7-11a7 7 0 1 0-14 0c0 5.4 7 11 7 11Z" />
+            <circle cx="12" cy="10" r="2.6" />
+          </svg>
+
+          <CampoCidade valor={cidade} onEscolher={onCidade} />
+
+          <button
+            onClick={onBuscar}
+            disabled={buscando}
+            className={
+              buscando
+                ? 'bg-[#3F3A63]'
+                : 'bg-[#7C3AED] hover:bg-[#6D28D9]'
+            }
+            style={{
+              flex: '0 0 auto',
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              padding: '10px 18px',
+              borderRadius: 9,
+              border: 'none',
+              color: '#fff',
+              fontSize: 13.5,
+              fontWeight: 600,
+              cursor: buscando ? 'wait' : 'pointer',
+            }}
+          >
+            <svg
+              width="15"
+              height="15"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.9"
+            >
+              <path d="M12 4.5v3M12 16.5v3M4.5 12h3M16.5 12h3M6.7 6.7l2.1 2.1M15.2 15.2l2.1 2.1M6.7 17.3l2.1-2.1M15.2 8.8l2.1-2.1" />
+            </svg>
+            {buscando ? 'Buscando...' : 'Buscar vagas compatíveis'}
+          </button>
+        </div>
+
+        <div
+          style={{
+            marginTop: 12,
+            fontSize: 12.5,
+            color: '#7C8699',
+            lineHeight: 1.6,
+          }}
+        >
+          Você não escolhe o cargo: a IA deduz do seu currículo. Cada busca custa{' '}
+          <strong style={{ color: '#B7C0D0' }}>1 requisição JSearch</strong> mais
+          as chamadas à Claude — uma para ler o currículo e uma por vaga
+          comparada. É a busca mais cara do app; a aba Controle registra a parte
+          da JSearch.
+        </div>
+      </div>
+
+      <div style={{ ...cartao, minHeight: 260 }}>
+        {buscando ? (
+          <Carregando />
+        ) : buscaFeita ? (
+          <ResultadoInteligente cidade={cidade} bancoVazio={bancoVazio} />
+        ) : (
+          <div
+            style={{
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 12,
+              minHeight: 220,
+              textAlign: 'center',
+            }}
+          >
+            <div style={{ fontSize: 15, fontWeight: 600 }}>
+              Informe a cidade e busque
+            </div>
+            <div
+              style={{
+                fontSize: 13,
+                color: '#8A94A6',
+                maxWidth: 420,
+                lineHeight: 1.6,
+              }}
+            >
+              A IA vai ler seu currículo, deduzir o cargo, procurar as vagas
+              dessa cidade e comparar uma a uma com o seu perfil. O resultado
+              volta ordenado por compatibilidade.
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Erro da busca. As mensagens vêm do `jsearch.js` já traduzidas — dizem o que
+ * fazer (conferir o .env, esperar a renovação da cota) em vez de só o status.
+ */
+function AvisoErro({ texto }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 10,
+        marginBottom: 14,
+        padding: '13px 16px',
+        borderRadius: 10,
+        border: '1px solid rgba(248,113,113,0.32)',
+        background: 'rgba(248,113,113,0.08)',
+        fontSize: 13,
+        color: '#F0A0A0',
+        lineHeight: 1.6,
+        maxWidth: 860,
+      }}
+    >
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        style={{ flex: '0 0 16px', marginTop: 2 }}
+      >
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 7.5v5M12 16h.01" />
+      </svg>
+      <span>{texto}</span>
+    </div>
+  )
+}
+
+/** Espera de uma chamada de rede. Um giro só, sem etapa detalhada. */
+function Carregando({ texto = 'Analisando currículo e comparando vagas...' }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 16,
+        minHeight: 220,
+      }}
+    >
+      <div
+        style={{
+          width: 34,
+          height: 34,
+          borderRadius: '50%',
+          border: '2.5px solid rgba(167,139,250,0.22)',
+          borderTopColor: '#A78BFA',
+          animation: 'girar 0.8s linear infinite',
+        }}
+      />
+      <div style={{ fontSize: 13.5, color: '#8A94A6' }}>
+        {texto}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * O resultado da busca inteligente. Enquanto nada está conectado, o honesto é
+ * nomear as três integrações que faltam — senão a tela parece só quebrada.
+ */
+function ResultadoInteligente({ cidade, bancoVazio }) {
+  const pendencia = (texto) => (
+    <li style={{ marginBottom: 6 }}>
+      <span style={{ color: '#D9A441' }}>◦</span> {texto}
+    </li>
+  )
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 14,
+        padding: '30px 10px',
+        textAlign: 'center',
+      }}
+    >
+      <div style={{ fontSize: 15, fontWeight: 600 }}>
+        Nada a ranquear ainda
+      </div>
+      <div
+        style={{
+          fontSize: 13,
+          color: '#8A94A6',
+          maxWidth: 460,
+          lineHeight: 1.6,
+        }}
+      >
+        A busca para {cidade || 'a cidade escolhida'} foi registrada na cota, mas
+        o resultado depende de três ligações que ainda não existem:
+      </div>
+      <ul
+        style={{
+          listStyle: 'none',
+          padding: 0,
+          margin: 0,
+          fontSize: 13,
+          color: '#8A94A6',
+          textAlign: 'left',
+          lineHeight: 1.6,
+        }}
+      >
+        {pendencia('Claude API para deduzir o cargo a partir do currículo')}
+        {pendencia(
+          bancoVazio
+            ? 'JSearch para trazer as vagas — o banco local está vazio'
+            : 'JSearch para trazer as vagas',
+        )}
+        {pendencia('Claude API para pontuar cada vaga contra o currículo')}
+      </ul>
+    </div>
+  )
+}
+
+/**
+ * Aba Controle: quanto da cota mensal da JSearch já foi gasto.
+ *
+ * O protótipo ainda não chama a API, então o que se vê aqui é o consumo que
+ * *haveria*. O mecanismo já é o definitivo — quando a chamada real entrar, o
+ * número passa a ser o de verdade sem mexer nesta tela.
+ */
+function PainelControle({ cota, onZerar, onLimparCache }) {
+  const gastas = usadas(cota)
+  const doCache = servidasDoCache(cota)
+  const restantes = Math.max(0, LIMITE_MENSAL - gastas)
+  const fracao = gastas / LIMITE_MENSAL
+
+  // Verde até a metade, âmbar a partir de 75%, vermelho perto do teto.
+  const cor = fracao >= 0.9 ? '#F87171' : fracao >= 0.75 ? '#D9A441' : '#4ADE80'
+
+  const cartao = {
+    border: '1px solid rgba(255,255,255,0.07)',
+    background: '#0B1220',
+    borderRadius: 12,
+    padding: 20,
+  }
+  const botao = {
+    padding: '8px 14px',
+    borderRadius: 9,
+    border: '1px solid rgba(255,255,255,0.12)',
+    fontSize: 13,
+    cursor: 'pointer',
+  }
+  const legenda = {
+    fontSize: 11.5,
+    fontWeight: 600,
+    letterSpacing: '0.09em',
+    textTransform: 'uppercase',
+    color: '#7C8699',
+  }
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+        maxWidth: 880,
+      }}
+    >
+      <div style={cartao}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            justifyContent: 'space-between',
+            gap: 16,
+            flexWrap: 'wrap',
+            marginBottom: 16,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+            <span style={{ fontSize: 34, fontWeight: 700, color: cor }}>
+              {gastas}
+            </span>
+            <span style={{ fontSize: 16, color: '#8A94A6' }}>
+              / {LIMITE_MENSAL} requisições
+            </span>
+          </div>
+          <button
+            onClick={onZerar}
+            className="bg-[#0E1729] text-[#C8D1E0] hover:bg-[#152039]"
+            style={botao}
+          >
+            Zerar contagem
+          </button>
+        </div>
+
+        {/* Um traço por requisição do mês: dá para ver quanto sobra sem ler
+            o número. */}
+        <div
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(50, 1fr)',
+            gap: 3,
+            marginBottom: 14,
+          }}
+          aria-hidden="true"
+        >
+          {Array.from({ length: LIMITE_MENSAL }, (_, i) => (
+            <div
+              key={i}
+              style={{
+                height: 14,
+                borderRadius: 2,
+                background: i < gastas ? cor : 'rgba(255,255,255,0.07)',
+              }}
+            />
+          ))}
+        </div>
+
+        <div style={{ fontSize: 13, color: '#8A94A6', lineHeight: 1.6 }}>
+          <strong style={{ color: '#E8ECF4', fontWeight: 600 }}>
+            {restantes}
+          </strong>{' '}
+          {restantes === 1 ? 'requisição restante' : 'requisições restantes'} no
+          ciclo
+          {cota.desde ? `, iniciado em ${fmtDataHora(cota.desde, false)}` : ''}.
+          {' '}O plano gratuito renova pela data da assinatura, não pelo dia 1º —
+          zere a contagem à mão quando ele virar.
+        </div>
+      </div>
+
+      <div style={cartao}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            justifyContent: 'space-between',
+            gap: 16,
+            flexWrap: 'wrap',
+            marginBottom: 10,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+            <span style={{ fontSize: 26, fontWeight: 700, color: '#60A5FA' }}>
+              {doCache}
+            </span>
+            <span style={{ fontSize: 14, color: '#8A94A6' }}>
+              {doCache === 1
+                ? 'busca servida do cache'
+                : 'buscas servidas do cache'}
+            </span>
+          </div>
+          <button
+            onClick={onLimparCache}
+            className="bg-[#0E1729] text-[#C8D1E0] hover:bg-[#152039]"
+            style={botao}
+          >
+            Limpar cache
+          </button>
+        </div>
+        <div style={{ fontSize: 13, color: '#8A94A6', lineHeight: 1.6 }}>
+          Repetir uma consulta já feita não gasta cota:{' '}
+          {doCache === 0
+            ? 'ainda não houve repetição nesta contagem.'
+            : doCache === 1
+              ? 'foi 1 requisição economizada.'
+              : `foram ${doCache} requisições economizadas.`}{' '}
+          Limpar o cache faz as próximas repetições voltarem a consumir.
+        </div>
+      </div>
+
+      <div style={{ ...cartao, padding: 0, overflow: 'hidden' }}>
+        <div
+          style={{
+            ...legenda,
+            padding: '14px 20px',
+            borderBottom: '1px solid rgba(255,255,255,0.06)',
+          }}
+        >
+          Últimas buscas
+        </div>
+        {cota.usos.length === 0 ? (
+          <div style={{ padding: '28px 20px', fontSize: 13, color: '#8A94A6' }}>
+            Nenhuma busca registrada. Consultas sem cargo e sem cidade não
+            entram: não haveria requisição a fazer.
+          </div>
+        ) : (
+          cota.usos.map((u, i) => (
+            <div
+              key={`${u.quando}-${i}`}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 12,
+                padding: '11px 20px',
+                borderBottom:
+                  i === cota.usos.length - 1
+                    ? 'none'
+                    : '1px solid rgba(255,255,255,0.04)',
+                fontSize: 13,
+              }}
+            >
+              <span
+                style={{
+                  flex: '0 0 7px',
+                  width: 7,
+                  height: 7,
+                  borderRadius: 4,
+                  background: u.origem === 'rede' ? '#F87171' : '#60A5FA',
+                }}
+              />
+              <span style={{ flex: 1, minWidth: 0, color: '#D3DAE6' }}>
+                {[u.termo, u.cidade].filter(Boolean).join(' em ') ||
+                  'consulta vazia'}
+              </span>
+              <span style={{ flex: '0 0 auto', color: '#7C8699' }}>
+                {fmtDataHora(u.quando, true)}
+              </span>
+              <span
+                style={{
+                  flex: '0 0 62px',
+                  textAlign: 'right',
+                  color: u.origem === 'rede' ? '#F0A0A0' : '#93B4FD',
+                  fontSize: 12.5,
+                }}
+              >
+                {u.origem === 'rede' ? 'rede' : 'cache'}
+              </span>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  )
+}
+
 /* ------------------------------ app ------------------------------ */
 
 export default function App() {
@@ -2080,17 +3132,36 @@ export default function App() {
   const [banco, setBanco] = useState(BANCO_DE_VAGAS)
 
   const [aba, setAba] = useState('vagas')
+  // Cargo e cidade existem em dois tempos: o rascunho é o que os seletores do
+  // bloco de destaque mostram, e `cargo`/`cidade` são os critérios da consulta
+  // já feita. `buscar()` promove um no outro. Os demais filtros não têm
+  // rascunho — valem no instante em que mudam.
+  //
+  // Estes dois não filtram a lista: eles *são* a consulta. O mock representa o
+  // que a busca por "Técnico de TI em Caxias do Sul" devolveu, com títulos
+  // variados como uma API de vagas devolve. Por isso a tabela aparece quando
+  // `consultaFeita` liga — porque se buscou — e não porque algum campo bateu.
+  const [cargoRascunho, setCargoRascunho] = useState('')
+  const [cidadeRascunho, setCidadeRascunho] = useState('')
   const [cargo, setCargo] = useState('')
-  const [busca, setBusca] = useState('')
-  const [empresa, setEmpresa] = useState('')
   const [cidade, setCidade] = useState('')
-  const [modalidade, setModalidade] = useState('')
-  const [status, setStatus] = useState('')
+  const [consultaFeita, setConsultaFeita] = useState(false)
+  const [buscando, setBuscando] = useState(false)
+  const [erroBusca, setErroBusca] = useState(null)
+
+  // A cota vem do localStorage, não do zero: é a única coisa do protótipo que
+  // atravessa o recarregamento. Lida na inicialização preguiçosa para não
+  // tocar no storage a cada render.
+  const [cota, setCota] = useState(lerCota)
 
   const [ordem, setOrdem] = useState('rank')
   const [direcao, setDirecao] = useState('desc')
   const [pagina, setPagina] = useState(1)
   const [porPagina, setPorPagina] = useState(10)
+
+  // Qual vaga está aberta em detalhe, por id. Guardo o id e não o objeto para
+  // a página acompanhar edições na lista (favoritar, marcar como lida).
+  const [vagaAberta, setVagaAberta] = useState(null)
 
   const [menu, setMenu] = useState(null)
   const [dicaAberta, setDicaAberta] = useState(false)
@@ -2098,6 +3169,12 @@ export default function App() {
   const [estreito, setEstreito] = useState(
     () => typeof window !== 'undefined' && window.innerWidth < 1024,
   )
+
+  // Aba Vaga Inteligente. A cidade é o único critério que o aluno informa: o
+  // cargo sairá do currículo, quando a Claude API entrar.
+  const [cidadeIa, setCidadeIa] = useState('')
+  const [buscandoIa, setBuscandoIa] = useState(false)
+  const [buscaIaFeita, setBuscaIaFeita] = useState(false)
 
   const [instrucao, setInstrucao] = useState(INSTRUCAO_PADRAO)
   const [cv, setCv] = useState(null)
@@ -2119,24 +3196,42 @@ export default function App() {
     return () => window.removeEventListener('click', aoClicar)
   }, [])
 
-  const filtradas = useMemo(() => {
-    const termos = busca.trim().toLowerCase().split(/\s+/).filter(Boolean)
-    const lista = banco.filter((j) => {
-      if (cargo && j.cargo !== cargo) return false
-      if (empresa && j.empresa !== empresa) return false
-      if (cidade && j.cidade !== cidade) return false
-      if (modalidade && j.modalidade !== modalidade) return false
-      if (status && j.status !== status) return false
-      if (!termos.length) return true
-      const alvo =
-        `${j.cargo} ${j.empresa} ${j.techs.join(' ')} ${j.cidade}`.toLowerCase()
-      return termos.every((t) => alvo.includes(t))
-    })
-    return ordenar(lista, ordem, direcao)
-  }, [banco, cargo, busca, empresa, cidade, modalidade, status, ordem, direcao])
+  /*
+   * O botão voltar do navegador fecha a página de detalhe.
+   *
+   * Abrir empurra uma entrada no histórico **sem trocar a URL** (o terceiro
+   * argumento do pushState fica vazio). Uma URL nova seria pior: no GitHub
+   * Pages não há servidor para reescrever rotas, então recarregar em
+   * `/vaga/123` daria 404. Assim o voltar funciona e o F5 continua abrindo o
+   * app — ao custo de a vaga não ser compartilhável por link.
+   */
+  useEffect(() => {
+    const aoVoltar = () => setVagaAberta(null)
+    window.addEventListener('popstate', aoVoltar)
+    return () => window.removeEventListener('popstate', aoVoltar)
+  }, [])
 
-  const empresas = useMemo(() => unicos(banco, 'empresa'), [banco])
-  const cidades = useMemo(() => unicos(banco, 'cidade'), [banco])
+  function abrirVaga(id) {
+    alterarVaga(id, (x) => ({ ...x, seen: true }))
+    setVagaAberta(id)
+    window.history.pushState({ vaga: id }, '')
+  }
+
+  function fecharVaga() {
+    // `back()` desfaz a entrada empurrada em `abrirVaga`; o popstate acima
+    // limpa o estado. Chamar setVagaAberta(null) aqui deixaria uma entrada
+    // órfã no histórico, e o voltar do navegador não faria nada visível.
+    window.history.back()
+  }
+
+  // Sem recorte local: o `banco` já é o retorno da consulta, e quem filtrou
+  // por localização foi a API. Comparar a cidade de novo aqui derrubaria vagas
+  // legítimas — a JSearch escreve "Caxias Do Sul" ou devolve municípios
+  // vizinhos, e nada disso bate com o rótulo exato do IBGE.
+  const filtradas = useMemo(
+    () => ordenar(banco, ordem, direcao),
+    [banco, ordem, direcao],
+  )
 
   const total = filtradas.length
   const maxPagina = Math.max(1, Math.ceil(total / porPagina))
@@ -2146,32 +3241,109 @@ export default function App() {
 
   const ehTabela = aba === 'vagas' || aba === 'banco'
 
-  // Na aba Vagas nada aparece até haver o que buscar: um termo digitado ou
-  // qualquer filtro escolhido. A aba Banco de Dados mostra o acervo sempre.
-  const buscaAtiva = Boolean(
-    busca.trim() || cargo || empresa || cidade || modalidade || status,
-  )
-  const mostrarResultados = aba === 'banco' || buscaAtiva
+  // A vaga aberta pode ter sido arquivada enquanto a página estava no ar;
+  // buscar pelo id a cada render evita mostrar um registro que já saiu.
+  const detalhe = vagaAberta
+    ? (banco.find((v) => v.id === vagaAberta) ?? null)
+    : null
+
+  // Na aba Vagas nada aparece até se buscar. A aba Banco de Dados mostra o
+  // acervo sempre.
+  const mostrarResultados = aba === 'banco' || consultaFeita
+
+  /**
+   * A busca de verdade. O cache vem antes da rede de propósito: são 200
+   * requisições por mês, e repetir uma consulta já feita não pode custar uma
+   * delas.
+   *
+   * Só conta como requisição gasta o que de fato tocou a API — um erro de
+   * chave ausente nunca sai da máquina, e um 401 é recusado antes de debitar.
+   * Quem sabe essa diferença é o `tocouApi` do ErroJSearch.
+   */
+  async function buscar() {
+    if (buscando) return
+
+    const termo = cargoRascunho.trim()
+    const cidadeAlvo = cidadeRascunho.trim()
+    if (!termo && !cidadeAlvo) {
+      setErroBusca('Informe ao menos o cargo ou a cidade para buscar.')
+      return
+    }
+
+    setCargo(cargoRascunho)
+    setCidade(cidadeRascunho)
+    setErroBusca(null)
+    setPagina(1)
+
+    const guardado = consultarCache(termo, cidadeAlvo)
+    if (guardado) {
+      setBanco(guardado.vagas)
+      setCota(registrarUso(termo, cidadeAlvo, 'cache'))
+      setConsultaFeita(true)
+      return
+    }
+
+    setBuscando(true)
+    try {
+      const resposta = await buscarVagas(montarConsulta(termo, cidadeAlvo))
+      const vagas = mapearVagas(vagasDaResposta(resposta))
+      setBanco(vagas)
+      setCota(registrarUso(termo, cidadeAlvo, 'rede', vagas))
+      setConsultaFeita(true)
+    } catch (err) {
+      const erro =
+        err instanceof ErroJSearch
+          ? err
+          : new ErroJSearch(`Erro inesperado: ${err.message}`)
+      setErroBusca(erro.message)
+      setBanco([])
+      setConsultaFeita(true)
+      // Um erro que chegou à API consumiu uma das 200 mesmo sem devolver vaga.
+      if (erro.tocouApi) {
+        setCota(registrarUso(termo, cidadeAlvo, 'rede'))
+      }
+    } finally {
+      setBuscando(false)
+    }
+  }
+
+  const consultaPendente =
+    cargoRascunho !== cargo || cidadeRascunho !== cidade
+
+  /**
+   * Busca inteligente. Hoje só encena: espera um instante e mostra o estado
+   * que explica o que falta. O que já é real é o registro na cota — o passo da
+   * JSearch gastaria uma das 200, e essa conta não pode começar depois.
+   *
+   * O termo vai como "Vaga Inteligente" porque o cargo verdadeiro só existirá
+   * quando a Claude API ler o currículo; é ele que ocupa esse lugar depois.
+   */
+  function buscarInteligente() {
+    if (buscandoIa) return
+    setBuscandoIa(true)
+    setCota(registrarUso('Vaga Inteligente', cidadeIa, 'rede'))
+    window.setTimeout(() => {
+      setBuscandoIa(false)
+      setBuscaIaFeita(true)
+    }, 900)
+  }
 
   function irParaAba(nova) {
     setAba(nova)
     setPagina(1)
-    setCargo('')
-    setBusca('')
-    setEmpresa('')
-    setCidade('')
-    setModalidade('')
-    setStatus('')
+    // Limpa só a consulta da aba Vagas. A cidade da Vaga Inteligente fica:
+    // o próprio fluxo manda o aluno até a Avaliação IA enviar o currículo e
+    // voltar, e perder o que ele já preencheu nesse caminho seria hostil.
+    limparConsulta()
     setMenu(null)
   }
 
-  function limparFiltros() {
+  function limparConsulta() {
+    setCargoRascunho('')
+    setCidadeRascunho('')
     setCargo('')
-    setBusca('')
-    setEmpresa('')
     setCidade('')
-    setModalidade('')
-    setStatus('')
+    setConsultaFeita(false)
     setPagina(1)
   }
 
@@ -2255,65 +3427,44 @@ export default function App() {
           padding: '22px 26px 30px',
         }}
       >
-        <Cabecalho
-          aba={aba}
-          busca={busca}
-          mostrarBusca={aba !== 'vagas'}
-          onBusca={(e) => {
-            setBusca(e.target.value)
-            setPagina(1)
-          }}
-        />
+        <Cabecalho aba={aba} />
 
-        {ehTabela && (
+        {/* A página de detalhe ocupa o lugar da tabela e do bloco de consulta:
+            é uma tela, não um painel dentro da listagem. */}
+        {ehTabela && detalhe && (
+          <PaginaVaga vaga={detalhe} onVoltar={fecharVaga} />
+        )}
+
+        {ehTabela && !detalhe && (
           <div>
             {aba === 'vagas' && (
-              <BuscaDestaque
-                valor={busca}
-                onChange={(e) => {
-                  setBusca(e.target.value)
-                  setPagina(1)
-                }}
-                onLimpar={() => {
-                  setBusca('')
-                  setPagina(1)
-                }}
+              <ConsultaDestaque
+                cargo={cargoRascunho}
+                cidade={cidadeRascunho}
+                onCargo={(e) => setCargoRascunho(e.target.value)}
+                // O combobox entrega o rótulo já escolhido da lista, não um
+                // evento: não há texto digitado virando valor.
+                onCidade={setCidadeRascunho}
+                onBuscar={buscar}
+                pendente={consultaPendente}
+                buscando={buscando}
               />
             )}
 
-            <Filtros
-              cargo={cargo}
-              empresa={empresa}
-              cidade={cidade}
-              modalidade={modalidade}
-              status={status}
-              empresas={empresas}
-              cidades={cidades}
-              onCargo={(e) => {
-                setCargo(e.target.value)
-                setPagina(1)
-              }}
-              onEmpresa={(e) => {
-                setEmpresa(e.target.value)
-                setPagina(1)
-              }}
-              onCidade={(e) => {
-                setCidade(e.target.value)
-                setPagina(1)
-              }}
-              onModalidade={(e) => {
-                setModalidade(e.target.value)
-                setPagina(1)
-              }}
-              onStatus={(e) => {
-                setStatus(e.target.value)
-                setPagina(1)
-              }}
-              onLimpar={limparFiltros}
-            />
+            {aba === 'vagas' && erroBusca && <AvisoErro texto={erroBusca} />}
 
-            {!mostrarResultados ? (
-              <EsperaBusca total={banco.length} />
+            {buscando ? (
+              <div
+                style={{
+                  border: '1px solid rgba(255,255,255,0.06)',
+                  background: '#0B1220',
+                  borderRadius: 12,
+                }}
+              >
+                <Carregando texto="Consultando a API de vagas..." />
+              </div>
+            ) : !mostrarResultados ? (
+              <EsperaBusca />
             ) : (
               <>
                 {/* Com zero resultados quem fala é o bloco "Nenhuma vaga
@@ -2326,7 +3477,9 @@ export default function App() {
                       {total}
                     </strong>{' '}
                     {total === 1 ? 'vaga encontrada' : 'vagas encontradas'}
-                    {busca.trim() ? ` para “${busca.trim()}”` : null}
+                    {cargo || cidade
+                      ? ` para “${[cargo, cidade].filter(Boolean).join(' em ')}”`
+                      : null}
                   </div>
                 )}
 
@@ -2356,9 +3509,11 @@ export default function App() {
                             e.stopPropagation()
                             setMenu((atual) => (atual === vaga.id ? null : vaga.id))
                           }}
-                          onDetalhes={(e) => {
-                            e.stopPropagation()
-                            alterarVaga(vaga.id, (x) => ({ ...x, seen: true }))
+                          // Chega com evento pelo item do menu e sem evento
+                          // pelo título, que já parou a propagação por conta.
+                          onAbrir={(e) => {
+                            e?.stopPropagation()
+                            abrirVaga(vaga.id)
                           }}
                           onFavorito={(e) => {
                             e.stopPropagation()
@@ -2376,12 +3531,18 @@ export default function App() {
                   {estreito && total > 0 && (
                     <div style={{ display: 'flex', flexDirection: 'column' }}>
                       {visiveis.map((vaga) => (
-                        <Card key={vaga.id} vaga={vaga} />
+                        <Card
+                          key={vaga.id}
+                          vaga={vaga}
+                          onAbrir={() => abrirVaga(vaga.id)}
+                        />
                       ))}
                     </div>
                   )}
   
-                  {total === 0 && <SemResultados onLimpar={limparFiltros} />}
+                  {total === 0 && (
+                    <SemResultados cidade={cidade} />
+                  )}
   
                   <Paginacao
                     total={total}
@@ -2424,6 +3585,30 @@ export default function App() {
             instrucao={instrucao}
             onInstrucao={(e) => setInstrucao(e.target.value)}
             onRestaurar={() => setInstrucao(INSTRUCAO_PADRAO)}
+          />
+        )}
+
+        {aba === 'inteligente' && (
+          <PainelVagaInteligente
+            cv={cv}
+            cidade={cidadeIa}
+            onCidade={(valor) => {
+              setCidadeIa(valor)
+              setBuscaIaFeita(false)
+            }}
+            buscando={buscandoIa}
+            buscaFeita={buscaIaFeita}
+            bancoVazio={banco.length === 0}
+            onBuscar={buscarInteligente}
+            onIrParaCurriculo={() => irParaAba('ia')}
+          />
+        )}
+
+        {aba === 'controle' && (
+          <PainelControle
+            cota={cota}
+            onZerar={() => setCota(zerarContagem())}
+            onLimparCache={() => setCota(limparCache())}
           />
         )}
       </main>

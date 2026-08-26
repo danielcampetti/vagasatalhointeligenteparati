@@ -76,3 +76,10 @@
     transform: none;
   }
 }
+
+/* Giro do indicador de carregando da aba Vaga Inteligente. */
+@keyframes girar {
+  to {
+    transform: rotate(360deg);
+  }
+}

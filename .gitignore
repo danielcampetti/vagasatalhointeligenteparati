@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Segredos. A chave da JSearch vive aqui e NUNCA vai para o repositório.
+.env
+.env.local
+.env.*.local
