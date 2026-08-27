@@ -40,7 +40,17 @@ export const PerfilSchema = z.object({
   ),
   formacao: z.string().nullable(),
   resumo: z.string().nullable(),
-  texto_extraido: z.string().nullable(),
+  // A descrição vai no schema (viaja em output_config, não no texto do
+  // prompt) de propósito: é o único lugar onde dá pra explicar quando este
+  // campo se aplica sem nomeá-lo no bloco de texto do caminho de texto — ver
+  // conteudoDeTexto, que não pode mencionar este campo (custaria os ~3.000
+  // tokens de saída que ele existe para evitar nesse caminho).
+  texto_extraido: z
+    .string()
+    .nullable()
+    .describe(
+      'Transcrição literal e completa do documento. Preencha só quando o currículo chegar como anexo PDF (bloco document); quando o currículo já vier como texto no prompt, deixe null — o texto já está com quem chamou, reproduzi-lo aqui é desperdício.',
+    ),
 })
 
 const REGRA_NULO =
@@ -67,15 +77,64 @@ export function conteudoDePdf(base64) {
 }
 
 /**
- * `.docx` e texto colado chegam como string — o navegador já extraiu. Pedir
- * a transcrição de volta custaria ~3.000 tokens de saída para reproduzir o
- * que já está em mãos, então texto_extraido fica null por instrução.
+ * `.docx` e texto colado chegam como string — o navegador já extraiu. Não se
+ * pede a transcrição de volta aqui, nem citando o nome do campo: já está em
+ * mãos, e pedir custaria ~3.000 tokens de saída à toa. Quem faz o campo
+ * sair null é a descrição em PerfilSchema — este texto não precisa (e não
+ * deve) tocar no assunto.
  */
 export function conteudoDeTexto(texto) {
   return [
     {
       type: 'text',
-      text: `Extraia o perfil profissional deste currículo. ${REGRA_NULO}\n\nDeixe texto_extraido como null.\n\nCurrículo:\n\n${texto}`,
+      text: `Extraia o perfil profissional deste currículo. ${REGRA_NULO}\n\nCurrículo:\n\n${texto}`,
     },
   ]
+}
+
+/**
+ * Um perfil sem tecnologia nenhuma não dá para ranquear: as dez notas sairiam
+ * plausíveis e sem fundamento nenhum no currículo. Melhor falhar aqui — onde a
+ * tela pode oferecer a textarea de colar texto — do que produzir um ranking
+ * inventado silenciosamente.
+ */
+export function conferirPerfil(perfil) {
+  if (!perfil) {
+    throw new ErroClaude('A extração não devolveu perfil nenhum.', {
+      tipo: 'vazio',
+    })
+  }
+  if (!Array.isArray(perfil.tecnologias) || perfil.tecnologias.length === 0) {
+    throw new ErroClaude(
+      'Não consegui ler tecnologia nenhuma neste currículo. Se ele for um PDF escaneado de baixa qualidade, cole o texto no campo abaixo.',
+      { tipo: 'vazio' },
+    )
+  }
+}
+
+/**
+ * Ponto de entrada do módulo: currículo (PDF em base64 ou texto já
+ * extraído) → perfil validado. Uma chamada só, com a dedução do cargo
+ * embutida na mesma resposta.
+ */
+export async function extrairPerfil({ base64, texto }) {
+  // `chamarEstruturado` cuida de teto, contabilização e checagem de recusa,
+  // na ordem certa — ver o cabeçalho de claude.js para o porquê da ordem ser
+  // fixa. Este módulo nunca chama o SDK direto.
+  const resposta = await chamarEstruturado(TIPOS.PERFIL, {
+    max_tokens: 8000, // folga para o texto_extraido do PDF
+    output_config: { format: zodOutputFormat(PerfilSchema) },
+    messages: [
+      {
+        role: 'user',
+        content: base64 ? conteudoDePdf(base64) : conteudoDeTexto(texto),
+      },
+    ],
+  })
+
+  // `parsed_output` vem null quando a validação do schema falha — não
+  // confiar sem checar, e checar tecnologias vazias mesmo quando o schema
+  // passou (um perfil bem-formado ainda pode estar vazio de conteúdo útil).
+  conferirPerfil(resposta.parsed_output)
+  return resposta.parsed_output
 }
