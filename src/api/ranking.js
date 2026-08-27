@@ -10,6 +10,21 @@
  * ranquear, não é porcentagem de compatibilidade — por isso a tela escreve
  * "Rank IA 87" e não "87%".
  *
+ * Essa relatividade tem um limite: acima de TAMANHO_LOTE vagas, a busca inteira
+ * não cabe numa chamada, e `ranquear` fatia em vários lotes (ver `emLotes`) —
+ * cada lote calibra sozinho, contra só quem está nele. A nota de um lote não é
+ * a mesma escala da nota de outro, e ordenar a tabela inteira por Rank IA
+ * mistura essas escalas sem avisar. Aceito de propósito, não corrigido: o
+ * fatiamento é equilibrado (nenhum lote pequeno demais para ter conjunto de
+ * comparação), e um ranqueamento aproximado sobre a busca inteira vale mais
+ * para quem está lendo do que um ranqueamento fino só nas primeiras
+ * TAMANHO_LOTE vagas e "—" no resto. Renormalizar entre lotes resolveria a
+ * mistura de escalas, mas hoje o caminho quase não dispara — `jsearch.js` fixa
+ * `num_pages: '1'` e a API devolve por volta de 10 resultados, abaixo de
+ * TAMANHO_LOTE — e complexidade num módulo que existe para pegar falha
+ * silenciosa tem custo real. Quem for aumentar o volume de resultados um dia
+ * esbarra nesta nota antes de ser mordido por ela.
+ *
  * Validar a volta não é zelo: um id que não voltou não grita, vira uma vaga sem
  * nota que ninguém percebe.
  */
@@ -98,18 +113,62 @@ async function pontuarLote(perfil, instrucao, vagas) {
 }
 
 /**
- * Uma chamada, mais uma segunda só com o que faltar. O que sobrar depois disso
- * fica sem nota e a lista aparece do mesmo jeito — tela em branco por causa de
- * um item faltando seria pior que ranking parcial.
+ * Fatia em `ceil(itens.length / tamanho)` lotes, distribuídos o mais uniforme
+ * possível — 13 itens com `tamanho` 12 viram `[7, 6]`, não `[12, 1]`. Um lote
+ * de 1 teria conjunto de comparação vazio, e a nota que saísse dali não seria
+ * relativa a nada. O número de lotes (e portanto de chamadas) é o mesmo dos
+ * dois jeitos; só a distribuição muda.
+ */
+function emLotes(itens, tamanho) {
+  const numLotes = Math.ceil(itens.length / tamanho)
+  if (numLotes === 0) return []
+
+  const base = Math.floor(itens.length / numLotes)
+  const comSobra = itens.length % numLotes // os `comSobra` primeiros lotes levam +1
+
+  const lotes = []
+  let i = 0
+  for (let l = 0; l < numLotes; l++) {
+    const tamanhoDoLote = base + (l < comSobra ? 1 : 0)
+    lotes.push(itens.slice(i, i + tamanhoDoLote))
+    i += tamanhoDoLote
+  }
+  return lotes
+}
+
+/**
+ * Pontua a lista inteira, em quantos lotes de TAMANHO_LOTE forem precisos —
+ * corrigido depois de revisão: um `.slice(0, TAMANHO_LOTE)` sozinho aqui
+ * descartava em silêncio tudo além da vaga 12 (nunca ia pra rede, nunca
+ * entrava em `faltando`, saía com `rank: null` sem aviso da causa real).
+ * Cada lote passa por `chamarEstruturado`, então o teto é reconferido a cada
+ * um, por construção do invólucro — não é preciso checar à mão.
+ */
+async function pontuarTodos(perfil, instrucao, vagas) {
+  let validas = new Map()
+  const faltando = []
+  for (const lote of emLotes(vagas, TAMANHO_LOTE)) {
+    const resultado = await pontuarLote(perfil, instrucao, lote)
+    validas = new Map([...validas, ...resultado.validas])
+    faltando.push(...resultado.faltando)
+  }
+  return { validas, faltando }
+}
+
+/**
+ * Todos os lotes, mais uma segunda volta só com o que faltou em qualquer um
+ * deles (também fatiada, se for grande). O que sobrar depois disso fica sem
+ * nota e a lista aparece do mesmo jeito — tela em branco por causa de um item
+ * faltando seria pior que ranking parcial.
  */
 export async function ranquear(perfil, instrucao, vagas) {
-  const primeira = await pontuarLote(perfil, instrucao, vagas.slice(0, TAMANHO_LOTE))
+  const primeira = await pontuarTodos(perfil, instrucao, vagas)
   let validas = primeira.validas
 
   if (primeira.faltando.length) {
     console.warn('[claude] sem nota na primeira volta:', primeira.faltando)
     const restantes = vagas.filter((v) => primeira.faltando.includes(v.id))
-    const segunda = await pontuarLote(perfil, instrucao, restantes)
+    const segunda = await pontuarTodos(perfil, instrucao, restantes)
     validas = new Map([...validas, ...segunda.validas])
     if (segunda.faltando.length) {
       console.warn('[claude] seguem sem nota:', segunda.faltando)

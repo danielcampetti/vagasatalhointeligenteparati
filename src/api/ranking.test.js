@@ -249,23 +249,94 @@ describe('ranquear', () => {
     expect(lista.find((v) => v.id === 'a2').rank).toBe(null)
   })
 
-  // TAMANHO_LOTE não é só documentação: sem o corte, um lote maior que o
-  // recomendado (qualidade cai a partir de 50, por isso o lote é de 10-15)
-  // sairia inteiro na primeira chamada, e nada neste arquivo perceberia a
-  // remoção do `.slice(0, TAMANHO_LOTE)` — este teste é o que perceberia.
-  test('a primeira chamada nunca leva mais que TAMANHO_LOTE vagas', async () => {
+  // Corrigido depois de revisão: um `.slice(0, TAMANHO_LOTE)` sozinho no
+  // início de `ranquear` descartava silenciosamente tudo além da vaga 12 —
+  // nunca ia pra rede, nunca entrava em `faltando`, e saía com `rank: null`
+  // sem nenhum aviso de que a causa era outra. `ranquear` agora fatia a
+  // lista inteira em lotes de TAMANHO_LOTE; os três testes abaixo substituem
+  // o teste antigo, que prendia o comportamento errado.
+  test('25 vagas: fatia em lotes de TAMANHO_LOTE e pontua todas, não só as 12 primeiras', async () => {
     chamarEstruturado.mockClear()
-    const idsExtra = Array.from({ length: TAMANHO_LOTE + 3 }, (_, i) => `x${i}`)
+    const ids = Array.from({ length: 25 }, (_, i) => `v${i}`)
+    // validarNotas filtra pelo que cada lote realmente enviou, então devolver
+    // as 25 em toda chamada simula o modelo respondendo certo a cada uma sem
+    // eu precisar inspecionar o conteúdo de cada chamada aqui.
     chamarEstruturado.mockResolvedValue({
-      parsed_output: { notas: idsExtra.map((id) => ({ id, nota: 50, motivo: 'x' })) },
+      parsed_output: { notas: ids.map((id) => ({ id, nota: 50, motivo: 'x' })) },
     })
 
-    const vagas = idsExtra.map((id) => vaga(id))
+    const vagas = ids.map((id) => vaga(id))
+    const resultado = await ranquear({ cargo: 'x' }, 'instrução', vagas)
+
+    const lotesEsperados = Math.ceil(ids.length / TAMANHO_LOTE)
+    expect(chamarEstruturado).toHaveBeenCalledTimes(lotesEsperados)
+    expect(resultado).toHaveLength(25)
+    expect(resultado.every((v) => v.rank === 50)).toBe(true)
+  })
+
+  // Achado numa segunda revisão do coordenador: cortar em pedaços de tamanho
+  // fixo deixa sobra pequena quando a divisão não é exata — 13 vagas com
+  // TAMANHO_LOTE 12 viram [12, 1]. Um lote de 1 tem conjunto de comparação
+  // vazio, e a nota que sairia dali não seria relativa a nada. O fatiamento
+  // equilibrado evita isso: mesma quantidade de lotes, distribuídos o mais
+  // uniforme possível. A asserção é sobre o TAMANHO dos lotes — a contagem de
+  // chamadas já é coberta pelo teste acima e não pegaria esta regressão
+  // sozinha, porque tanto [12, 1] quanto [7, 6] somam 2 chamadas.
+  test('13 vagas: fatiamento equilibrado — nenhum lote fica com 1 vaga só, sem conjunto de comparação', async () => {
+    chamarEstruturado.mockClear()
+    const ids = Array.from({ length: 13 }, (_, i) => `v${i}`)
+    chamarEstruturado.mockResolvedValue({
+      parsed_output: { notas: ids.map((id) => ({ id, nota: 50, motivo: 'x' })) },
+    })
+
+    const vagas = ids.map((id) => vaga(id))
     await ranquear({ cargo: 'x' }, 'instrução', vagas)
 
-    const conteudoPrimeira = chamarEstruturado.mock.calls[0][1].messages[0].content
-    // Os três últimos ids (fora do lote) não podem aparecer na primeira chamada.
-    expect(conteudoPrimeira).not.toContain(`"id": "${idsExtra.at(-1)}"`)
-    expect(conteudoPrimeira).toContain(`"id": "${idsExtra[0]}"`)
+    const tamanhosDosLotes = chamarEstruturado.mock.calls.map(
+      ([, params]) => (params.messages[0].content.match(/"id": "/g) || []).length,
+    )
+    expect(tamanhosDosLotes).toEqual([7, 6])
+    expect(tamanhosDosLotes.every((n) => n > 1)).toBe(true)
+  })
+
+  test('toda vaga enviada a ranquear passa por alguma chamada — nenhuma é descartada em silêncio pelo corte de lote', async () => {
+    chamarEstruturado.mockClear()
+    const ids = Array.from({ length: 25 }, (_, i) => `v${i}`)
+    chamarEstruturado.mockResolvedValue({ parsed_output: { notas: [] } })
+
+    const vagas = ids.map((id) => vaga(id))
+    await ranquear({ cargo: 'x' }, 'instrução', vagas)
+
+    // É esta a asserção que pegaria o defeito: com o `.slice(0, TAMANHO_LOTE)`
+    // isolado de antes, só os 12 primeiros ids apareceriam em alguma chamada.
+    const enviados = new Set()
+    for (const [, params] of chamarEstruturado.mock.calls) {
+      const conteudo = params.messages[0].content
+      for (const id of ids) {
+        if (conteudo.includes(`"id": "${id}"`)) enviados.add(id)
+      }
+    }
+    expect(enviados).toEqual(new Set(ids))
+  })
+
+  test('lote grande com falha persistente numa vaga: o caminho degradado continua íntegro — resto pontuado, a que sobrou fica rank null, sem lançar', async () => {
+    chamarEstruturado.mockClear()
+    const ids = Array.from({ length: 25 }, (_, i) => `v${i}`)
+    chamarEstruturado.mockImplementation(async (_tipo, params) => {
+      const conteudo = params.messages[0].content
+      const enviados = ids.filter((id) => conteudo.includes(`"id": "${id}"`))
+      // v24 nunca volta pontuada, nem na primeira nem na segunda volta.
+      const notas = enviados
+        .filter((id) => id !== 'v24')
+        .map((id) => ({ id, nota: 70, motivo: 'x' }))
+      return { parsed_output: { notas } }
+    })
+
+    const vagas = ids.map((id) => vaga(id))
+    const resultado = await ranquear({ cargo: 'x' }, 'instrução', vagas)
+
+    expect(resultado).toHaveLength(25)
+    expect(resultado.find((v) => v.id === 'v24').rank).toBe(null)
+    expect(resultado.filter((v) => v.id !== 'v24').every((v) => v.rank === 70)).toBe(true)
   })
 })
