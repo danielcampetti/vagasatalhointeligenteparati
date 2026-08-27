@@ -1,9 +1,102 @@
 import { useState } from 'react'
 import { mensagemDoErro } from '../api/claude'
 import { extrairPerfil } from '../api/perfil'
-import { gravarCurriculo } from '../curriculo'
+import {
+  corrigirPerfil,
+  gravarCurriculo,
+  limparCorrecoes,
+  perfilEfetivo,
+  removerCurriculo,
+} from '../curriculo'
 import { extrairDocx } from '../docx'
 import { AvisoErro, Carregando } from './comuns'
+
+// `senioridade` e `aceita_remoto` são os dois campos de enum/booleano do
+// PerfilSchema (ver api/perfil.js) — os rótulos aqui só existem para
+// acentuar o que o schema guarda sem acento (o <option value> precisa bater
+// com o enum exato, o <option> visível não).
+const OPCOES_SENIORIDADE = [
+  { valor: 'junior', rotulo: 'júnior' },
+  { valor: 'pleno', rotulo: 'pleno' },
+  { valor: 'senior', rotulo: 'sênior' },
+  { valor: 'especialista', rotulo: 'especialista' },
+]
+const OPCOES_REMOTO = [
+  { valor: 'sim', rotulo: 'sim' },
+  { valor: 'nao', rotulo: 'não' },
+]
+const PROFUNDIDADE_TEXTO = {
+  producao: 'produção',
+  projeto: 'projeto',
+  contato: 'contato',
+}
+
+/**
+ * Rótulo + input controlado. `vazio` é o texto mostrado quando `valor` é
+ * `null` — placeholder num campo de texto/número, opção própria num select.
+ * `null` nunca vira string vazia por acidente: cada onChange decide de volta
+ * para `null` explicitamente, porque é essa a diferença que o perfil guarda
+ * ("o currículo não diz" vs. "o aluno apagou de propósito").
+ */
+function Campo({ rotulo, valor, vazio, tipo = 'texto', opcoes, sufixo, aoMudar }) {
+  const estiloCampo = {
+    width: '100%',
+    padding: '9px 12px',
+    borderRadius: 9,
+    border: '1px solid rgba(255,255,255,0.09)',
+    background: '#0E1729',
+    color: '#D3DAE6',
+    fontSize: 13,
+    outline: 'none',
+    fontFamily: 'inherit',
+  }
+  return (
+    <div style={{ marginBottom: 14 }}>
+      <label style={{ display: 'block', fontSize: 12.5, color: '#8A94A6', marginBottom: 5 }}>
+        {rotulo}
+      </label>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, maxWidth: 340 }}>
+        {tipo === 'select' ? (
+          <select
+            value={valor ?? ''}
+            onChange={(e) => aoMudar(e.target.value === '' ? null : e.target.value)}
+            style={{ ...estiloCampo, cursor: 'pointer' }}
+          >
+            <option value="">{vazio}</option>
+            {opcoes.map((op) => (
+              <option key={op.valor} value={op.valor}>
+                {op.rotulo}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            type={tipo === 'numero' ? 'number' : 'text'}
+            value={valor ?? ''}
+            placeholder={vazio}
+            onChange={(e) =>
+              aoMudar(
+                tipo === 'numero'
+                  ? Number.isNaN(e.target.valueAsNumber)
+                    ? null
+                    : e.target.valueAsNumber
+                  : e.target.value === ''
+                    ? null
+                    : e.target.value,
+              )
+            }
+            style={estiloCampo}
+          />
+        )}
+        {sufixo && (
+          <span style={{ fontSize: 12.5, color: '#8A94A6', whiteSpace: 'nowrap' }}>
+            {sufixo}
+          </span>
+        )}
+      </div>
+    </div>
+  )
+}
 
 /** `FileReader` devolve `data:...;base64,XXXX` — só o pedaço depois da vírgula
  * é o que a Claude aceita como bloco `document`. */
@@ -37,6 +130,34 @@ export default function PainelIA({
   const [lendo, setLendo] = useState(false)
   const [erro, setErro] = useState(null)
   const [textoColado, setTextoColado] = useState('')
+
+  // O que a tela de conferência mostra: o extraído, com as correções do
+  // aluno por cima. `perfilEfetivo` volta `null` se `cv` ainda não tem
+  // perfil (upload em andamento, ou currículo nunca enviado) — mesma checagem
+  // que decide qual dos dois cartões aparece mais abaixo.
+  const perfil = perfilEfetivo(cv)
+
+  // As três ações da tela de conferência gravam direto em `vagas:cv`, via
+  // curriculo.js — não passam pelo estado do React antes disso. `onCv`
+  // repassa o resultado para o `App` só depois de já estar gravado, porque
+  // quem manda no que persiste é `curriculo.js`, não o componente.
+  function aoCorrigir(campo, valor) {
+    const novoCv = corrigirPerfil(campo, valor)
+    if (novoCv) onCv(novoCv)
+  }
+
+  function aoLimparCorrecoes() {
+    const novoCv = limparCorrecoes()
+    if (novoCv) onCv(novoCv)
+  }
+
+  function aoRemoverCurriculo() {
+    // `removerCurriculo` apaga do localStorage; `onRemoverCv` apaga do
+    // estado do `App`. Os dois são necessários — só o segundo deixaria o
+    // currículo voltar sozinho no próximo F5.
+    removerCurriculo()
+    onRemoverCv()
+  }
 
   const cartao = {
     border: '1px solid rgba(255,255,255,0.06)',
@@ -268,7 +389,160 @@ export default function PainelIA({
           </>
         )}
 
-        {!lendo && cv && (
+        {/* A tela de conferência substitui o cartão do arquivo assim que há
+         * perfil para mostrar — é contra ele, não contra o nome do arquivo,
+         * que as vagas são comparadas. Ver spec, seção 4. */}
+        {!lendo && perfil && (
+          <div>
+            <div style={{ fontSize: 13, color: '#C8D1E0', marginBottom: 3 }}>
+              Isto é o que a IA entendeu do seu currículo.
+            </div>
+            <div style={{ fontSize: 12.5, color: '#8A94A6', marginBottom: 16 }}>
+              Corrija o que estiver errado — é contra isto que as vagas são
+              comparadas.
+            </div>
+
+            <Campo
+              rotulo="Cargo"
+              valor={perfil.cargo_deduzido}
+              vazio="não identificado"
+              aoMudar={(v) => aoCorrigir('cargo_deduzido', v)}
+            />
+            <Campo
+              rotulo="Senioridade"
+              tipo="select"
+              valor={perfil.senioridade}
+              vazio="não informada"
+              opcoes={OPCOES_SENIORIDADE}
+              aoMudar={(v) => aoCorrigir('senioridade', v)}
+            />
+            <Campo
+              rotulo="Cidade"
+              valor={perfil.cidade}
+              vazio="não identificada"
+              aoMudar={(v) => aoCorrigir('cidade', v)}
+            />
+            <Campo
+              rotulo="Pretensão salarial"
+              tipo="numero"
+              valor={perfil.pretensao_min}
+              vazio="não informada"
+              sufixo="R$ mil"
+              aoMudar={(v) => aoCorrigir('pretensao_min', v)}
+            />
+            {/* O campo vazio é o caso comum, não a exceção — quase nenhum
+             * currículo traz pretensão salarial. A placeholder já diz "não
+             * informada"; esta linha é o convite para preencher, e some
+             * assim que o campo deixa de estar vazio. */}
+            {perfil.pretensao_min === null && (
+              <div
+                style={{
+                  fontSize: 11.5,
+                  color: '#7C8699',
+                  marginTop: -10,
+                  marginBottom: 14,
+                  maxWidth: 340,
+                }}
+              >
+                Poucos currículos trazem isso. Preencher faz as vagas serem
+                pesadas também pela compatibilidade salarial.
+              </div>
+            )}
+            <Campo
+              rotulo="Aceita remoto"
+              tipo="select"
+              valor={
+                perfil.aceita_remoto === null
+                  ? null
+                  : perfil.aceita_remoto
+                    ? 'sim'
+                    : 'nao'
+              }
+              vazio="não informado"
+              opcoes={OPCOES_REMOTO}
+              aoMudar={(v) =>
+                aoCorrigir('aceita_remoto', v === null ? null : v === 'sim')
+              }
+            />
+
+            {/* Tecnologias e formação são listas — editá-las pediria
+             * interface de lista, e o ganho não paga: quem discorda do que a
+             * IA leu reenvia o currículo. Ficam como texto, sem edição. */}
+            <div style={{ marginTop: 4, marginBottom: 14 }}>
+              <div style={{ fontSize: 12.5, color: '#8A94A6', marginBottom: 4 }}>
+                Tecnologias
+              </div>
+              <div style={{ fontSize: 13, color: '#D3DAE6', lineHeight: 1.5 }}>
+                {perfil.tecnologias?.length
+                  ? perfil.tecnologias
+                      .map(
+                        (t) =>
+                          `${t.nome} (${PROFUNDIDADE_TEXTO[t.profundidade] ?? t.profundidade})`,
+                      )
+                      .join(', ')
+                  : 'nenhuma identificada'}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 18 }}>
+              <div style={{ fontSize: 12.5, color: '#8A94A6', marginBottom: 4 }}>
+                Formação
+              </div>
+              <div style={{ fontSize: 13, color: '#D3DAE6', lineHeight: 1.5 }}>
+                {perfil.formacao ?? 'não informada'}
+              </div>
+            </div>
+
+            <div
+              style={{
+                display: 'flex',
+                gap: 10,
+                flexWrap: 'wrap',
+                marginBottom: 16,
+              }}
+            >
+              <button
+                onClick={aoLimparCorrecoes}
+                className="bg-transparent hover:bg-white/[0.05]"
+                style={{
+                  padding: '9px 16px',
+                  borderRadius: 9,
+                  border: '1px solid rgba(255,255,255,0.1)',
+                  color: '#C8D1E0',
+                  fontSize: 13,
+                  cursor: 'pointer',
+                }}
+              >
+                Voltar ao que a IA entendeu
+              </button>
+              <button
+                onClick={aoRemoverCurriculo}
+                className="bg-transparent text-[#FCA5A5] hover:bg-[rgba(239,68,68,0.1)]"
+                style={{
+                  padding: '9px 16px',
+                  borderRadius: 9,
+                  border: '1px solid rgba(239,68,68,0.25)',
+                  fontSize: 13,
+                  cursor: 'pointer',
+                }}
+              >
+                Remover currículo
+              </button>
+            </div>
+
+            <div style={{ fontSize: 11.5, color: '#7C8699', lineHeight: 1.6 }}>
+              Seu currículo fica guardado só neste navegador, nesta máquina.
+              <br />
+              Ele sai daqui apenas na hora de comparar com as vagas.
+            </div>
+          </div>
+        )}
+
+        {/* Fallback defensivo: `cv` sem `perfil` não deveria acontecer — todo
+         * currículo gravado por `gravarCurriculo` tem perfil junto —, mas
+         * cair aqui em vez de tela em branco é mais barato que garantir a
+         * invariante em três lugares diferentes. */}
+        {!lendo && cv && !perfil && (
           <div
             style={{
               display: 'flex',
