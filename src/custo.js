@@ -10,9 +10,18 @@
  * vira mentira no dia do reajuste. Token é fato.
  */
 
-/** US$ por 1M de tokens. Fonte: precificação da Anthropic. */
+/**
+ * US$ por 1M de tokens. Fonte: precificação da Anthropic.
+ *
+ * `claude-opus-5` não é mais o MODELO ativo (trocado por `claude-sonnet-5`
+ * para baratear), mas a entrada fica: chamadas antigas gravadas no
+ * localStorage do aluno ainda citam esse modelo em `chamadas[].modelo`, e
+ * `dolares()` trata modelo fora da tabela como US$ 0 — apagar a entrada
+ * zeraria o gasto histórico em silêncio, não só o futuro.
+ */
 export const PRECOS = {
   'claude-opus-5': { entrada: 5, saida: 25 },
+  'claude-sonnet-5': { entrada: 2, saida: 10 },
 }
 
 /** Teto mensal de partida. Seguro barato contra um bug de laço. */

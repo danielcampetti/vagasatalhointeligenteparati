@@ -18,7 +18,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { dolares, excedeuTeto, lerCusto, registrarChamada } from '../custo'
 
 /** O modelo mora aqui e em nenhum outro lugar. */
-export const MODELO = 'claude-opus-5'
+export const MODELO = 'claude-sonnet-5'
 
 /**
  * Os três valores de `tipo` que `contabilizar` grava — centralizados para
