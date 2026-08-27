@@ -65,13 +65,16 @@ describe('conferirResposta', () => {
       throw new Error('devia ter lançado')
     } catch (err) {
       expect(err.tipo).toBe('vazio')
+      // A mesma mensagem serve para as três chamadas do invólucro (perfil,
+      // ranking, justificativa) — não pode apontar para "o currículo" quando
+      // quem cortou foi um lote de vagas ou uma justificativa em prosa.
+      expect(err.message).not.toMatch(/currículo/i)
     }
   })
 
   test('lança quando a saída foi cortada por estourar a janela de contexto', () => {
     // Mesmo efeito de max_tokens — saída pela metade — mas stop_reason
-    // diferente (model_context_window_exceeded). Plausível na Task 6, que
-    // manda um currículo em PDF inteiro para dentro do contexto.
+    // diferente (model_context_window_exceeded).
     try {
       conferirResposta({
         stop_reason: 'model_context_window_exceeded',
@@ -80,6 +83,7 @@ describe('conferirResposta', () => {
       throw new Error('devia ter lançado')
     } catch (err) {
       expect(err.tipo).toBe('vazio')
+      expect(err.message).not.toMatch(/currículo/i)
     }
   })
 
@@ -338,6 +342,50 @@ describe('mensagemDoErro', () => {
 
   test('erro desconhecido não devolve undefined', () => {
     expect(mensagemDoErro(new Error('qualquer coisa'))).toBeTruthy()
+  })
+})
+
+describe('mensagemDoErro — guarda local sem chave (x-claude-proxy)', () => {
+  // Corpo, status e header copiados de vite.config.js > guardaDeChave, não
+  // reconstruídos de memória: status 500, header `x-${nome}-proxy: sem-chave`
+  // com nome='claude', corpo `{ message: '${variavel} não encontrada. Copie
+  // .env.example para .env, cole sua chave e reinicie o npm run dev.' }` com
+  // variavel='ANTHROPIC_API_KEY'.
+  const CORPO_GUARDA = {
+    message:
+      'ANTHROPIC_API_KEY não encontrada. Copie .env.example para .env, cole sua chave e reinicie o npm run dev.',
+  }
+
+  test('corpo real da guarda vira a própria mensagem, sem o enquadramento "A Claude respondeu"', () => {
+    const headers = new Headers()
+    headers.set('x-claude-proxy', 'sem-chave')
+    const err = new Anthropic.InternalServerError(500, CORPO_GUARDA, undefined, headers)
+
+    const msg = mensagemDoErro(err)
+    // A requisição nunca chegou à Claude — "A Claude respondeu" seria
+    // mentira. Isto também prende o fallback `corpo?.message` de
+    // detalheDoErro: o corpo da guarda tem `.message` no topo, sem
+    // `.error.message` aninhado — diferente do formato real de erro da
+    // Anthropic (sempre aninhado), que é o único formato que os testes de
+    // 400/500 acima exercitam. Sem este teste, apagar `|| corpo?.message`
+    // deixava os outros 61 testes verdes.
+    expect(msg).not.toMatch(/A Claude respondeu/)
+    expect(msg).toBe(CORPO_GUARDA.message)
+  })
+
+  test('header com outro valor não desvia do fluxo normal de APIError', () => {
+    const headers = new Headers()
+    headers.set('x-claude-proxy', 'outra-coisa')
+    const err = new Anthropic.InternalServerError(
+      500,
+      { type: 'error', error: { type: 'api_error', message: 'Internal server error' } },
+      undefined,
+      headers,
+    )
+    // Prova que o ramo checa o valor exato 'sem-chave', não só a presença do
+    // header — um 500 real da Anthropic, se algum dia vier com um header de
+    // nome parecido por acidente, não pode perder o enquadramento correto.
+    expect(mensagemDoErro(err)).toMatch(/^A Claude respondeu 500: /)
   })
 })
 

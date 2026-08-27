@@ -50,12 +50,13 @@ export class ErroClaude extends Error {
   constructor(mensagem, { tipo = 'api', status = 0 } = {}) {
     super(mensagem)
     this.name = 'ErroClaude'
-    // Só os quatro que este módulo de fato produz. 'config' e 'rede' (ver
-    // ErroJSearch) ficariam pro chamador só se o invólucro passasse a
-    // capturar e reclassificar erro do SDK — não há necessidade disso hoje:
-    // mensagemDoErro já trata Anthropic.APIConnectionError e
-    // AuthenticationError direto, sem precisar de um ErroClaude no meio.
-    this.tipo = tipo // 'teto' | 'recusa' | 'vazio' | 'api'
+    // 'rede' ficaria pro chamador só se o invólucro passasse a capturar e
+    // reclassificar Anthropic.APIConnectionError — não há necessidade disso
+    // hoje, mensagemDoErro já trata esse caso direto. 'config' É produzido:
+    // ver o ramo do header x-claude-proxy em mensagemDoErro, que cobre a
+    // guarda local de chave ausente (vite.config.js, guardaDeChave) — sem
+    // isso, o 500 dela seria indistinguível de um 500 real da Anthropic.
+    this.tipo = tipo // 'config' | 'teto' | 'recusa' | 'vazio' | 'api'
     this.status = status
   }
 }
@@ -88,14 +89,22 @@ export function conferirResposta(resposta) {
     )
   }
   // `model_context_window_exceeded` tem o mesmo efeito de `max_tokens` — saída
-  // cortada no meio, JSON pela metade para quem chamou. Plausível aqui: a
-  // Task 6 manda um currículo em PDF inteiro para dentro do contexto.
+  // cortada no meio, JSON pela metade para quem chamou.
   if (
     resposta?.stop_reason === 'max_tokens' ||
     resposta?.stop_reason === 'model_context_window_exceeded'
   ) {
+    // Esta mensagem é compartilhada pelas três chamadas do invólucro
+    // (perfil, ranking, justificativa) — "cole só a parte profissional"
+    // mandaria o aluno mexer no currículo quando quem cortou foi um lote de
+    // vagas ou uma justificativa em prosa, nenhum dos dois culpa do
+    // currículo. Uma frase por tipo foi cogitada, mas só perfil tem causa
+    // certa: o tamanho do lote de ranking é uma constante do código
+    // (TAMANHO_LOTE), não algo que o aluno escolhe, e a justificativa não
+    // tem entrada do aluno que controle o tamanho da saída — nos dois casos
+    // a frase específica seria inventada, não mais certa que esta.
     throw new ErroClaude(
-      'A resposta foi cortada por tamanho. Se o currículo for muito longo, cole só a parte profissional.',
+      'A resposta foi cortada por tamanho. Tente novamente com menos vagas de uma vez ou um texto mais curto.',
       { tipo: 'vazio' },
     )
   }
@@ -167,6 +176,19 @@ export function mensagemDoErro(err) {
   }
   if (err instanceof Anthropic.APIConnectionError) {
     return 'Não foi possível falar com o servidor de desenvolvimento. O npm run dev ainda está rodando?'
+  }
+  // A guarda local (vite.config.js, guardaDeChave) devolve 500 quando falta
+  // ANTHROPIC_API_KEY — a requisição nunca saiu da máquina. Olhando só o
+  // status isso é indistinguível de um 500 de verdade da Anthropic; o header
+  // `x-claude-proxy: sem-chave` existe exatamente para separar os dois, e sem
+  // lê-lo aqui a tela diria "A Claude respondeu 500" para um pedido que a
+  // Claude nunca viu. Embrulhado em ErroClaude porque o `tipo: 'config'` é
+  // real — ver o comentário do construtor.
+  if (err?.headers?.get?.('x-claude-proxy') === 'sem-chave') {
+    return new ErroClaude(detalheDoErro(err) || err.message, {
+      tipo: 'config',
+      status: err.status,
+    }).message
   }
   if (err instanceof Anthropic.APIError) {
     return `A Claude respondeu ${err.status}: ${detalheDoErro(err) || err.message}`
