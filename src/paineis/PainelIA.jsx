@@ -1,15 +1,42 @@
+import { useState } from 'react'
+import { mensagemDoErro } from '../api/claude'
+import { extrairPerfil } from '../api/perfil'
+import { gravarCurriculo } from '../curriculo'
+import { extrairDocx } from '../docx'
+import { AvisoErro, Carregando } from './comuns'
+
+/** `FileReader` devolve `data:...;base64,XXXX` — só o pedaço depois da vírgula
+ * é o que a Claude aceita como bloco `document`. */
+function paraBase64(arquivo) {
+  return new Promise((ok, falha) => {
+    const leitor = new FileReader()
+    leitor.onload = () => ok(String(leitor.result).split(',')[1])
+    leitor.onerror = () => falha(new Error('Não foi possível ler o arquivo.'))
+    leitor.readAsDataURL(arquivo)
+  })
+}
+
+function formatarTamanho(bytes) {
+  const kb = bytes / 1024
+  return kb > 1024
+    ? `${(kb / 1024).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(kb))} KB`
+}
+
 export default function PainelIA({
   cv,
+  onCv,
   arrastando,
-  onArquivo,
   onArrastarSobre,
   onArrastarSair,
-  onSoltar,
   onRemoverCv,
   instrucao,
   onInstrucao,
   onRestaurar,
 }) {
+  const [lendo, setLendo] = useState(false)
+  const [erro, setErro] = useState(null)
+
   const cartao = {
     border: '1px solid rgba(255,255,255,0.06)',
     background: '#0B1220',
@@ -19,6 +46,49 @@ export default function PainelIA({
     maxWidth: 820,
   }
   const palavras = instrucao.trim().split(/\s+/).filter(Boolean).length
+
+  // `.pdf` vai pro bloco `document` da Claude, que lê nativamente. Qualquer
+  // outra extensão passa pelo caminho de texto (`extrairDocx`, via mammoth):
+  // um `.doc` renomeado ou um arquivo não relacionado caem lá também, e o
+  // `mammoth` já lança a mensagem certa pros dois casos — não precisa de
+  // guarda extra aqui.
+  async function enviarArquivo(arquivo) {
+    setErro(null)
+    setLendo(true)
+    try {
+      const ehPdf = arquivo.name.toLowerCase().endsWith('.pdf')
+      const texto = ehPdf ? '' : await extrairDocx(arquivo)
+      const perfil = await extrairPerfil(
+        ehPdf ? { base64: await paraBase64(arquivo) } : { texto },
+      )
+      const novoCv = gravarCurriculo({
+        arquivo: {
+          nome: arquivo.name,
+          tamanho: formatarTamanho(arquivo.size),
+          quando: new Date().toISOString(),
+        },
+        texto,
+        perfil,
+      })
+      onCv(novoCv)
+    } catch (err) {
+      setErro(mensagemDoErro(err))
+    } finally {
+      setLendo(false)
+    }
+  }
+
+  function aoEscolherArquivo(e) {
+    const arquivo = e.target.files && e.target.files[0]
+    if (arquivo) enviarArquivo(arquivo)
+  }
+
+  function aoSoltar(e) {
+    e.preventDefault()
+    onArrastarSair()
+    const arquivo = e.dataTransfer.files && e.dataTransfer.files[0]
+    if (arquivo) enviarArquivo(arquivo)
+  }
 
   return (
     <>
@@ -51,11 +121,15 @@ export default function PainelIA({
           A IA compara este currículo com cada vaga para calcular o Rank IA.
         </div>
 
-        {!cv && (
+        {erro && <AvisoErro texto={erro} />}
+
+        {lendo && <Carregando texto="Lendo currículo..." />}
+
+        {!lendo && !cv && (
           <label
             onDragOver={onArrastarSobre}
             onDragLeave={onArrastarSair}
-            onDrop={onSoltar}
+            onDrop={aoSoltar}
             style={{
               display: 'flex',
               flexDirection: 'column',
@@ -72,8 +146,8 @@ export default function PainelIA({
           >
             <input
               type="file"
-              accept=".pdf,.doc,.docx"
-              onChange={onArquivo}
+              accept=".pdf,.docx"
+              onChange={aoEscolherArquivo}
               style={{ display: 'none' }}
             />
             <svg
@@ -91,12 +165,12 @@ export default function PainelIA({
               Arraste seu currículo aqui ou clique para selecionar
             </div>
             <div style={{ fontSize: 11.5, color: '#7C8699' }}>
-              PDF, DOC ou DOCX até 5 MB
+              PDF ou DOCX até 5 MB
             </div>
           </label>
         )}
 
-        {cv && (
+        {!lendo && cv && (
           <div
             style={{
               display: 'flex',
@@ -142,10 +216,10 @@ export default function PainelIA({
                   whiteSpace: 'nowrap',
                 }}
               >
-                {cv.nome}
+                {cv.arquivo.nome}
               </div>
               <div style={{ fontSize: 11.5, color: '#8A94A6', marginTop: 2 }}>
-                {cv.tamanho} · enviado agora
+                {cv.arquivo.tamanho} · enviado agora
               </div>
             </div>
             <label
@@ -162,8 +236,8 @@ export default function PainelIA({
               Substituir
               <input
                 type="file"
-                accept=".pdf,.doc,.docx"
-                onChange={onArquivo}
+                accept=".pdf,.docx"
+                onChange={aoEscolherArquivo}
                 style={{ display: 'none' }}
               />
             </label>

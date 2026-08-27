@@ -2441,17 +2441,6 @@ export default function App() {
     setBanco((lista) => lista.filter((x) => x.id !== id))
   }
 
-  function registrarCv(arquivo) {
-    const kb = arquivo.size / 1024
-    setCv({
-      nome: arquivo.name,
-      tamanho:
-        kb > 1024
-          ? `${(kb / 1024).toFixed(1)} MB`
-          : `${Math.max(1, Math.round(kb))} KB`,
-    })
-  }
-
   function salvarVaga() {
     if (!form.cargo.trim()) {
       setModalAberto(false)
@@ -2643,22 +2632,13 @@ export default function App() {
         {aba === 'ia' && (
           <PainelIA
             cv={cv}
+            onCv={setCv}
             arrastando={arrastando}
-            onArquivo={(e) => {
-              const arquivo = e.target.files && e.target.files[0]
-              if (arquivo) registrarCv(arquivo)
-            }}
             onArrastarSobre={(e) => {
               e.preventDefault()
               if (!arrastando) setArrastando(true)
             }}
             onArrastarSair={() => setArrastando(false)}
-            onSoltar={(e) => {
-              e.preventDefault()
-              const arquivo = e.dataTransfer.files && e.dataTransfer.files[0]
-              setArrastando(false)
-              if (arquivo) registrarCv(arquivo)
-            }}
             onRemoverCv={() => setCv(null)}
             instrucao={instrucao}
             onInstrucao={(e) => {

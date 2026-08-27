@@ -148,9 +148,9 @@ export default function PainelVagaInteligente({
           <path d="M4 12.5l5 5L20 6.5" />
         </svg>
         <span style={{ fontSize: 13.5, color: '#D3DAE6' }}>
-          Currículo: <strong style={{ fontWeight: 600 }}>{cv.nome}</strong>
+          Currículo: <strong style={{ fontWeight: 600 }}>{cv.arquivo.nome}</strong>
         </span>
-        <span style={{ fontSize: 12.5, color: '#7C8699' }}>{cv.tamanho}</span>
+        <span style={{ fontSize: 12.5, color: '#7C8699' }}>{cv.arquivo.tamanho}</span>
       </div>
 
       <div style={cartao}>
