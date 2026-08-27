@@ -353,4 +353,39 @@ describe('ranquear', () => {
     expect(resultado.find((v) => v.id === 'v24').rank).toBe(null)
     expect(resultado.filter((v) => v.id !== 'v24').every((v) => v.rank === 70)).toBe(true)
   })
+
+  // Corrigido depois de revisão: `pontuarTodos` não tinha try/catch por
+  // lote, então um lote que lançasse (o teto de custo é o gatilho mais
+  // provável — o lote 1 empurra o gasto além do limite e o lote 2 lança em
+  // `conferirTeto`) derrubava o `ranquear` inteiro, e as notas do lote 1 —
+  // já cobradas — morriam sem chegar à tela.
+  test('lote que lança no meio não apaga as notas dos lotes já pagos antes dele', async () => {
+    chamarEstruturado.mockClear()
+    const ids = Array.from({ length: 13 }, (_, i) => `v${i}`) // fatia em [7, 6]
+    chamarEstruturado.mockImplementation(async (_tipo, params) => {
+      const conteudo = params.messages[0].content
+      // O lote que contém v10 (o segundo, [7,6] = v7..v12) sempre lança —
+      // simula o teto de custo estourando e continuando estourado numa
+      // eventual segunda volta.
+      if (conteudo.includes('"id": "v10"')) {
+        throw new Error('Teto de custo atingido')
+      }
+      const enviados = ids.filter((id) => conteudo.includes(`"id": "${id}"`))
+      return {
+        parsed_output: {
+          notas: enviados.map((id) => ({ id, nota: 90, motivo: 'x' })),
+        },
+      }
+    })
+
+    const vagas = ids.map((id) => vaga(id))
+    const resultado = await ranquear({ cargo: 'x' }, 'instrução', vagas)
+
+    // As 7 vagas do primeiro lote já foram cobradas e pontuadas — não podem
+    // sumir só porque o segundo lote lançou.
+    expect(resultado.filter((v) => v.rank === 90)).toHaveLength(7)
+    // O lote que lançou fica sem nota — degrada, não derruba a lista inteira.
+    expect(resultado).toHaveLength(13)
+    expect(resultado.find((v) => v.id === 'v10').rank).toBe(null)
+  })
 })

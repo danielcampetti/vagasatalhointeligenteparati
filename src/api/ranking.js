@@ -170,14 +170,30 @@ function emLotes(itens, tamanho) {
  * entrava em `faltando`, saía com `rank: null` sem aviso da causa real).
  * Cada lote passa por `chamarEstruturado`, então o teto é reconferido a cada
  * um, por construção do invólucro — não é preciso checar à mão.
+ *
+ * Corrigido de novo depois de outra revisão: o `await` acima não tinha
+ * try/catch. Um lote que lançasse — o gatilho mais provável é o próprio teto
+ * de custo, já que o lote 1 pode empurrar o gasto além do limite e o lote 2
+ * lançar em `conferirTeto` — derrubava o `for` inteiro, e as `validas` já
+ * acumuladas dos lotes anteriores, **já cobradas**, morriam com ele. O
+ * caminho degradado deste módulo existe desde `validarNotas` para nota
+ * individual faltando; um lote inteiro falhando merece o mesmo tratamento,
+ * não um throw que apaga o que já foi pago. Por isso cada lote entra em seu
+ * próprio try/catch: quem falha vira `faltando` (tentado de novo na segunda
+ * volta, e se persistir sai com `rank: null`), quem já respondeu fica de pé.
  */
 async function pontuarTodos(perfil, instrucao, vagas) {
   let validas = new Map()
   const faltando = []
   for (const lote of emLotes(vagas, TAMANHO_LOTE)) {
-    const resultado = await pontuarLote(perfil, instrucao, lote)
-    validas = new Map([...validas, ...resultado.validas])
-    faltando.push(...resultado.faltando)
+    try {
+      const resultado = await pontuarLote(perfil, instrucao, lote)
+      validas = new Map([...validas, ...resultado.validas])
+      faltando.push(...resultado.faltando)
+    } catch (err) {
+      console.warn('[claude] lote falhou, mantendo o que já foi pago:', err)
+      faltando.push(...lote.map((v) => v.id))
+    }
   }
   return { validas, faltando }
 }
