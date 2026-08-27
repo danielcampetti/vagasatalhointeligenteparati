@@ -186,7 +186,12 @@ export default function PainelVagaInteligente({
 
           <button
             onClick={onBuscar}
-            disabled={buscando}
+            // A fase de ranking (`ranqueando`) dura vários segundos com a
+            // lista já na tela; sem isto o botão fica clicável e inerte
+            // nesse intervalo — `onBuscar` recusaria de qualquer forma
+            // (`buscarInteligente` guarda `if (buscandoIa || ranqueandoIa)
+            // return`), mas sem avisar por que o clique não fez nada.
+            disabled={buscando || ranqueando}
             className={
               buscando
                 ? 'bg-[#3F3A63]'

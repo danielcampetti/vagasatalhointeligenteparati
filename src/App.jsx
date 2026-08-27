@@ -787,6 +787,7 @@ function ConsultaDestaque({
   onBuscar,
   pendente,
   buscando,
+  ranqueando,
 }) {
   return (
     <div style={{ maxWidth: 860, marginBottom: 14 }}>
@@ -852,7 +853,12 @@ function ConsultaDestaque({
 
         <button
           onClick={onBuscar}
-          disabled={buscando}
+          // `ranqueando` dura vários segundos com a tabela já na tela; sem
+          // ele no `disabled` o botão fica clicável e inerte nesse
+          // intervalo — `buscar()` já recusa (`if (buscando || ranqueando)
+          // return`), mas em silêncio, sem avisar por que o clique não fez
+          // nada.
+          disabled={buscando || ranqueando}
           className={buscando ? 'bg-[#2A3B5E]' : 'bg-[#2563EB] hover:bg-[#1D4FD8]'}
           style={{
             flex: '0 0 auto',
@@ -2666,6 +2672,21 @@ export default function App() {
 
     const termo = perfil.cargo_deduzido ?? ''
     const cidadeAlvo = cidadeIa.trim()
+
+    // Sem os dois, a consulta sai vazia: `montarConsulta('', '')` devolve
+    // '', a JSearch responde 400, e um 400 tem `tocouApi: true` — debita uma
+    // das 200 requisições do mês por um pedido que já dava para saber, antes
+    // de sair, que não tinha o que buscar. A aba Vagas recusa consulta vazia
+    // (`buscar()`, acima), mas a mensagem de lá fala em "cargo", campo que
+    // não existe aqui — o cargo vem do currículo, não de um input; por isso
+    // a mensagem própria, apontando o que de fato falta.
+    if (!termo.trim() && !cidadeAlvo) {
+      setErroIa(
+        'A extração não deduziu um cargo do currículo, e nenhuma cidade foi informada — preencha a cidade para buscar.',
+      )
+      return
+    }
+
     setErroIa(null)
     setBuscaIaFeita(false)
 
@@ -2826,6 +2847,7 @@ export default function App() {
                 onBuscar={buscar}
                 pendente={consultaPendente}
                 buscando={buscando}
+                ranqueando={ranqueando}
               />
             )}
 
