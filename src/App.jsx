@@ -10,9 +10,11 @@ import {
   usadas,
   zerarContagem,
 } from './cota'
+import { mensagemDoErro } from './api/claude'
 import { ErroJSearch, buscarVagas, montarConsulta, vagasDaResposta } from './api/jsearch'
 import { mapearVagas } from './api/mapear'
-import { definirInstrucao, lerCurriculo } from './curriculo'
+import { ranquear } from './api/ranking'
+import { definirInstrucao, lerCurriculo, perfilEfetivo } from './curriculo'
 import CampoCidade from './paineis/CampoCidade'
 import { AvisoErro, Carregando } from './paineis/comuns'
 import PainelIA from './paineis/PainelIA'
@@ -2223,6 +2225,13 @@ export default function App() {
   const [buscando, setBuscando] = useState(false)
   const [erroBusca, setErroBusca] = useState(null)
 
+  // O ranking roda depois que o banco já tem vagas — cache ou rede — e nunca
+  // bloqueia a lista aparecendo. `ranqueando` também tranca uma nova busca
+  // enquanto ele está no ar: sem isso, um `setBanco` do ranking anterior
+  // poderia chegar depois do banco de uma busca mais nova e sobrescrevê-la.
+  const [ranqueando, setRanqueando] = useState(false)
+  const [erroRanking, setErroRanking] = useState(null)
+
   // A cota vem do localStorage, não do zero: é a única coisa do protótipo que
   // atravessa o recarregamento. Lida na inicialização preguiçosa para não
   // tocar no storage a cada render.
@@ -2339,7 +2348,7 @@ export default function App() {
    * Quem sabe essa diferença é o `tocouApi` do ErroJSearch.
    */
   async function buscar() {
-    if (buscando) return
+    if (buscando || ranqueando) return
 
     const termo = cargoRascunho.trim()
     const cidadeAlvo = cidadeRascunho.trim()
@@ -2351,6 +2360,7 @@ export default function App() {
     setCargo(cargoRascunho)
     setCidade(cidadeRascunho)
     setErroBusca(null)
+    setErroRanking(null)
     setPagina(1)
 
     const guardado = consultarCache(termo, cidadeAlvo)
@@ -2358,16 +2368,19 @@ export default function App() {
       setBanco(guardado.vagas)
       setCota(registrarUso(termo, cidadeAlvo, 'cache'))
       setConsultaFeita(true)
+      await ranquearBanco(guardado.vagas)
       return
     }
 
     setBuscando(true)
+    let vagasEncontradas = null
     try {
       const resposta = await buscarVagas(montarConsulta(termo, cidadeAlvo))
       const vagas = mapearVagas(vagasDaResposta(resposta))
       setBanco(vagas)
       setCota(registrarUso(termo, cidadeAlvo, 'rede', vagas))
       setConsultaFeita(true)
+      vagasEncontradas = vagas
     } catch (err) {
       const erro =
         err instanceof ErroJSearch
@@ -2382,6 +2395,36 @@ export default function App() {
       }
     } finally {
       setBuscando(false)
+    }
+
+    // A lista já está na tela neste ponto — buscando virou false acima. O
+    // ranking, se rodar, só repõe o banco quando terminar.
+    if (vagasEncontradas) {
+      await ranquearBanco(vagasEncontradas)
+    }
+  }
+
+  /**
+   * Pontua as vagas com a Claude e repõe o banco, se houver currículo. Sem
+   * ele não faz nada — o ranking é enriquecimento da aba Vagas, não
+   * pré-requisito; quem quer currículo obrigatório usa a Vaga Inteligente.
+   *
+   * Erro aqui não derruba a busca: `banco` fica com as vagas que o JSearch já
+   * devolveu, que custaram uma das 200 requisições mensais, e um aviso aparece
+   * acima da tabela sem tirá-las da tela.
+   */
+  async function ranquearBanco(vagas) {
+    const perfil = perfilEfetivo(cv)
+    if (!perfil || vagas.length === 0) return
+
+    setRanqueando(true)
+    try {
+      const ranqueadas = await ranquear(perfil, instrucao, vagas)
+      setBanco(ranqueadas)
+    } catch (err) {
+      setErroRanking(mensagemDoErro(err))
+    } finally {
+      setRanqueando(false)
     }
   }
 
@@ -2519,6 +2562,7 @@ export default function App() {
             )}
 
             {aba === 'vagas' && erroBusca && <AvisoErro texto={erroBusca} />}
+            {aba === 'vagas' && erroRanking && <AvisoErro texto={erroRanking} />}
 
             {buscando ? (
               <div
