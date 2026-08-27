@@ -116,6 +116,16 @@ function formatarTamanho(bytes) {
     : `${Math.max(1, Math.round(kb))} KB`
 }
 
+/**
+ * O dropzone promete "PDF ou DOCX até 5 MB", e nada conferia. Sem isto um
+ * arquivo grande passava direto: `extrairPerfil` já tinha sido chamada —
+ * chamada paga — antes de `gravarCurriculo` esbarrar no `QuotaExceededError`
+ * do localStorage (curriculo.js engole esse erro de propósito), e o
+ * currículo aparecia na tela e sumia no F5, sem aviso nenhum. Recusar antes
+ * de chamar evita as duas coisas.
+ */
+const TAMANHO_MAXIMO_BYTES = 5 * 1024 * 1024
+
 export default function PainelIA({
   cv,
   onCv,
@@ -177,6 +187,14 @@ export default function PainelIA({
   // guarda extra aqui.
   async function enviarArquivo(arquivo) {
     setErro(null)
+
+    if (arquivo.size > TAMANHO_MAXIMO_BYTES) {
+      setErro(
+        `Este arquivo tem ${formatarTamanho(arquivo.size)}, acima do limite de 5 MB. Cole o texto do currículo na caixa abaixo em vez de enviar o arquivo.`,
+      )
+      return
+    }
+
     setLendo(true)
     const ehPdf = arquivo.name.toLowerCase().endsWith('.pdf')
 
@@ -621,7 +639,11 @@ export default function PainelIA({
               />
             </label>
             <button
-              onClick={onRemoverCv}
+              // `onRemoverCv` sozinho só mexe no estado do React — o
+              // currículo volta no F5. `aoRemoverCurriculo` (acima) chama
+              // `removerCurriculo()` e `onRemoverCv`, os dois necessários;
+              // o X do cartão de conferência (mais abaixo) já usa o certo.
+              onClick={aoRemoverCurriculo}
               className="bg-transparent text-[#8A94A6] hover:bg-[rgba(239,68,68,0.1)] hover:text-[#FCA5A5]"
               style={{
                 width: 32,
