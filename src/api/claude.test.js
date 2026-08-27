@@ -413,6 +413,60 @@ describe('C-1 — baseURL absoluta e rewrite do proxy (regressão)', () => {
   })
 })
 
+describe('guardaDeChave — x-should-retry (regressão)', () => {
+  // Invoca a guarda de verdade (não uma reimplementação): pega o plugin pelo
+  // nome, chama configureServer com um `server` falso pra capturar o
+  // middleware, e o middleware com um `res` falso pra capturar os headers.
+  // Sem chave no ambiente de teste (o mesmo motivo do aviso "[claude]
+  // ANTHROPIC_API_KEY ausente" em toda rodada), então a guarda dispara de
+  // verdade — se disparasse `next()`, o teste abaixo derrubaria sozinho.
+  function capturarHeadersDaGuarda(nomePlugin) {
+    const config = configVite({ mode: 'development' })
+    const plugin = config.plugins.find((p) => p?.name === nomePlugin)
+    expect(plugin).toBeTruthy()
+
+    let handler
+    plugin.configureServer({
+      middlewares: { use: (_prefixo, h) => { handler = h } },
+    })
+    expect(typeof handler).toBe('function')
+
+    const headers = {}
+    const res = {
+      statusCode: null,
+      setHeader: (nome, valor) => { headers[nome] = valor },
+      end: () => {},
+    }
+    handler({}, res, () => {
+      throw new Error('não devia chamar next() — sem chave no ambiente de teste')
+    })
+    return headers
+  }
+
+  test('a guarda da Claude marca a resposta como não repetível', () => {
+    // Sem isto, 5xx é retentável por padrão no SDK (client.ts > shouldRetry)
+    // e o aluno espera ~1,4s de espera morta, em três tentativas, vendo nada
+    // — a chave ausente não vai aparecer numa segunda tentativa.
+    const headers = capturarHeadersDaGuarda('guarda-de-chave-claude')
+    expect(headers['x-should-retry']).toBe('false')
+  })
+
+  // Não há um teste em runtime equivalente para a guarda do JSearch aqui:
+  // este projeto já tem uma JSEARCH_API_KEY real no .env (só falta a da
+  // Claude), então a guarda do JSearch cai no `next()` e nunca chega a
+  // escrever headers — forçar o outro caminho exigiria mexer no
+  // vite.config.js além da linha autorizada, ou mockar `loadEnv`, nenhum dos
+  // dois vale o teste. A garantia aqui é estrutural, não de runtime: o
+  // `res.setHeader('x-should-retry', 'false')` está dentro do corpo
+  // compartilhado de `guardaDeChave`, sem `if` nenhum sobre `nome` — é a
+  // mesma função, com o mesmo corpo, para as duas guardas (só `nome`,
+  // `prefixo`, `chave` e `variavel` mudam por chamada). O teste acima já
+  // prova que esse corpo escreve o header quando a guarda dispara; não há
+  // como o resultado ser diferente para o JSearch quando a dele dispara —
+  // e jsearch.js (fetch puro, só lê `x-jsearch-proxy`, sem laço de retry
+  // próprio) não faz nada com o header de qualquer forma.
+})
+
 describe('M-5 — MODELO tem preço cadastrado em custo.js', () => {
   test('PRECOS[MODELO] existe', () => {
     // Sem isto, um MODELO fora da tabela de custo.js faz `dolares()` somar

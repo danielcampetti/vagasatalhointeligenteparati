@@ -24,6 +24,12 @@ function guardaDeChave({ nome, prefixo, chave, variavel }) {
         res.statusCode = 500
         res.setHeader('content-type', 'application/json; charset=utf-8')
         res.setHeader(`x-${nome}-proxy`, 'sem-chave')
+        // Sem chave é um fato do ambiente, não uma falha passageira: tentar de
+        // novo não acha a chave. O SDK da Claude obedece este header antes de
+        // olhar o status — sem ele, o 5xx daqui vira ~1,4s de espera morta em
+        // três tentativas antes do aluno ver a mensagem. Inerte do lado do
+        // JSearch: jsearch.js usa fetch puro e só lê x-jsearch-proxy.
+        res.setHeader('x-should-retry', 'false')
         res.end(
           JSON.stringify({
             message: `${variavel} não encontrada. Copie .env.example para .env, cole sua chave e reinicie o npm run dev.`,
