@@ -12,6 +12,7 @@ import {
 } from './cota'
 import { ErroJSearch, buscarVagas, montarConsulta, vagasDaResposta } from './api/jsearch'
 import { mapearVagas } from './api/mapear'
+import { definirInstrucao, lerCurriculo } from './curriculo'
 import CampoCidade from './paineis/CampoCidade'
 import { AvisoErro, Carregando } from './paineis/comuns'
 import PainelIA from './paineis/PainelIA'
@@ -2249,8 +2250,12 @@ export default function App() {
   const [buscandoIa, setBuscandoIa] = useState(false)
   const [buscaIaFeita, setBuscaIaFeita] = useState(false)
 
-  const [instrucao, setInstrucao] = useState(INSTRUCAO_PADRAO)
-  const [cv, setCv] = useState(null)
+  // Lidas de uma vez, com a forma de função: sem ela, `lerCurriculo()`
+  // rodaria a cada render, e não só na montagem.
+  const [instrucao, setInstrucao] = useState(
+    () => lerCurriculo()?.instrucao ?? INSTRUCAO_PADRAO,
+  )
+  const [cv, setCv] = useState(() => lerCurriculo())
   const [arrastando, setArrastando] = useState(false)
   const [form, setForm] = useState(FORM_VAZIO)
 
@@ -2656,8 +2661,18 @@ export default function App() {
             }}
             onRemoverCv={() => setCv(null)}
             instrucao={instrucao}
-            onInstrucao={(e) => setInstrucao(e.target.value)}
-            onRestaurar={() => setInstrucao(INSTRUCAO_PADRAO)}
+            onInstrucao={(e) => {
+              // `definirInstrucao` só grava se já houver currículo em
+              // `vagas:cv` (ver curriculo.js) — editar a instrução antes de
+              // enviar um currículo não persiste. Aceitável: a instrução só
+              // importa quando há currículo para ranquear com ela.
+              setInstrucao(e.target.value)
+              definirInstrucao(e.target.value)
+            }}
+            onRestaurar={() => {
+              setInstrucao(INSTRUCAO_PADRAO)
+              definirInstrucao(INSTRUCAO_PADRAO)
+            }}
           />
         )}
 
