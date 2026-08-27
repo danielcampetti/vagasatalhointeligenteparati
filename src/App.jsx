@@ -2420,7 +2420,22 @@ export default function App() {
     setRanqueando(true)
     try {
       const ranqueadas = await ranquear(perfil, instrucao, vagas)
-      setBanco(ranqueadas)
+      // Mescla por id, escrevendo só o que o ranking produz — nunca
+      // `setBanco(ranqueadas)`. O ranking leva alguns segundos; nesse
+      // intervalo o aluno pode favoritar, arquivar ou marcar como vista, e
+      // `ranqueadas` é a foto do banco de *antes* dessa janela. Repor a
+      // lista inteira com ela apagaria essas ações em silêncio — a estrela
+      // se desmarcaria sozinha, sem erro, sem explicação. A forma funcional
+      // de `setBanco` lê o estado no momento em que aplica, não o que foi
+      // capturado quando o ranking começou, então uma vaga arquivada nesse
+      // meio-tempo (que já saiu de `atual` via filter) continua fora —
+      // iterar sobre `ranqueadas` a traria de volta por engano.
+      setBanco((atual) =>
+        atual.map((v) => {
+          const r = ranqueadas.find((x) => x.id === v.id)
+          return r ? { ...v, rank: r.rank, rankMotivo: r.rankMotivo } : v
+        }),
+      )
     } catch (err) {
       setErroRanking(mensagemDoErro(err))
     } finally {
