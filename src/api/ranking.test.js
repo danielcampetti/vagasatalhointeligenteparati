@@ -248,4 +248,24 @@ describe('ranquear', () => {
     expect(lista.find((v) => v.id === 'a1').rank).toBe(80)
     expect(lista.find((v) => v.id === 'a2').rank).toBe(null)
   })
+
+  // TAMANHO_LOTE não é só documentação: sem o corte, um lote maior que o
+  // recomendado (qualidade cai a partir de 50, por isso o lote é de 10-15)
+  // sairia inteiro na primeira chamada, e nada neste arquivo perceberia a
+  // remoção do `.slice(0, TAMANHO_LOTE)` — este teste é o que perceberia.
+  test('a primeira chamada nunca leva mais que TAMANHO_LOTE vagas', async () => {
+    chamarEstruturado.mockClear()
+    const idsExtra = Array.from({ length: TAMANHO_LOTE + 3 }, (_, i) => `x${i}`)
+    chamarEstruturado.mockResolvedValue({
+      parsed_output: { notas: idsExtra.map((id) => ({ id, nota: 50, motivo: 'x' })) },
+    })
+
+    const vagas = idsExtra.map((id) => vaga(id))
+    await ranquear({ cargo: 'x' }, 'instrução', vagas)
+
+    const conteudoPrimeira = chamarEstruturado.mock.calls[0][1].messages[0].content
+    // Os três últimos ids (fora do lote) não podem aparecer na primeira chamada.
+    expect(conteudoPrimeira).not.toContain(`"id": "${idsExtra.at(-1)}"`)
+    expect(conteudoPrimeira).toContain(`"id": "${idsExtra[0]}"`)
+  })
 })
