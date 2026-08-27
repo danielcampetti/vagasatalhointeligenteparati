@@ -40,17 +40,6 @@ export const PerfilSchema = z.object({
   ),
   formacao: z.string().nullable(),
   resumo: z.string().nullable(),
-  // A descrição vai no schema (viaja em output_config, não no texto do
-  // prompt) de propósito: é o único lugar onde dá pra explicar quando este
-  // campo se aplica sem nomeá-lo no bloco de texto do caminho de texto — ver
-  // conteudoDeTexto, que não pode mencionar este campo (custaria os ~3.000
-  // tokens de saída que ele existe para evitar nesse caminho).
-  texto_extraido: z
-    .string()
-    .nullable()
-    .describe(
-      'Transcrição literal e completa do documento. Preencha só quando o currículo chegar como anexo PDF (bloco document); quando o currículo já vier como texto no prompt, deixe null — o texto já está com quem chamou, reproduzi-lo aqui é desperdício.',
-    ),
 })
 
 const REGRA_NULO =
@@ -58,10 +47,19 @@ const REGRA_NULO =
 
 /**
  * PDF vai como bloco `document` — a Claude lê PDF nativamente, o que também
- * cobre currículo escaneado sem OCR próprio. `texto_extraido` só é pedido
- * aqui: para PDF o navegador nunca viu o texto, e a justificativa detalhada
- * (Task 8) precisa dele depois. Documento antes do texto porque a pergunta
- * ("extraia isto") só faz sentido depois do "isto" ter sido apresentado.
+ * cobre currículo escaneado sem OCR próprio. Documento antes do texto porque
+ * a pergunta ("extraia isto") só faz sentido depois do "isto" ter sido
+ * apresentado.
+ *
+ * Não se pede mais a transcrição do documento aqui. Havia um campo
+ * `texto_extraido` que fazia isso — custava ~US$ 0,075 por upload de PDF,
+ * mais que o dobro do resto desta extração, só para alimentar a
+ * justificativa detalhada (Task 8) com o texto cru. Removido por custo: para
+ * PDF, `curriculo.js` agora grava `texto: ''`, e `justificativa.js` cai no
+ * fallback testado de "use só o perfil" (ver `montarPrompt` lá). A
+ * consequência é assumida: a justificativa de um PDF sai mais pobre que a de
+ * um `.docx` ou texto colado, que sempre têm o texto cru porque o navegador
+ * já o extraiu antes de chegar aqui.
  */
 export function conteudoDePdf(base64) {
   return [
@@ -71,17 +69,16 @@ export function conteudoDePdf(base64) {
     },
     {
       type: 'text',
-      text: `Extraia o perfil profissional deste currículo. ${REGRA_NULO}\n\nEm texto_extraido, transcreva o documento inteiro literalmente — é a única fonte de texto que existe para um PDF, porque o navegador não o abriu.`,
+      text: `Extraia o perfil profissional deste currículo. ${REGRA_NULO}`,
     },
   ]
 }
 
 /**
- * `.docx` e texto colado chegam como string — o navegador já extraiu. Não se
- * pede a transcrição de volta aqui, nem citando o nome do campo: já está em
- * mãos, e pedir custaria ~3.000 tokens de saída à toa. Quem faz o campo
- * sair null é a descrição em PerfilSchema — este texto não precisa (e não
- * deve) tocar no assunto.
+ * `.docx` e texto colado chegam como string — o navegador já extraiu. Nada a
+ * pedir de volta aqui: o texto cru já está em mãos de quem chamou
+ * (`curriculo.js` guarda) e é ele quem alimenta a justificativa detalhada
+ * depois — diferente do caminho de PDF, onde esse texto nunca existe.
  */
 export function conteudoDeTexto(texto) {
   return [
@@ -134,7 +131,7 @@ export async function extrairPerfil({ base64, texto }) {
   // na ordem certa — ver o cabeçalho de claude.js para o porquê da ordem ser
   // fixa. Este módulo nunca chama o SDK direto.
   const resposta = await chamarEstruturado(TIPOS.PERFIL, {
-    max_tokens: 8000, // folga para o texto_extraido do PDF
+    max_tokens: 2000,
     output_config: { format: zodOutputFormat(PerfilSchema) },
     messages: [
       {

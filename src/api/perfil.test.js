@@ -8,7 +8,6 @@ vi.mock('./claude', async (importOriginal) => {
   return { ...real, chamarEstruturado: vi.fn() }
 })
 import { chamarEstruturado, TIPOS } from './claude'
-import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import {
   PerfilSchema,
   conferirPerfil,
@@ -26,7 +25,6 @@ const PERFIL_BOM = {
   tecnologias: [{ nome: 'Python', profundidade: 'producao', anos: 3 }],
   formacao: null,
   resumo: 'Suporte migrando para dev.',
-  texto_extraido: 'texto completo do currículo',
 }
 
 describe('PerfilSchema', () => {
@@ -82,9 +80,14 @@ describe('conteudoDePdf', () => {
     })
   })
 
-  test('pede a transcrição, que é a única fonte de texto do PDF', () => {
+  // Havia um campo `texto_extraido` e uma frase pedindo a transcrição
+  // completa do documento aqui — custava ~US$ 0,075 por upload de PDF, mais
+  // que o dobro do resto desta extração, e foi removido por custo (ver o
+  // comentário de conteudoDePdf em perfil.js). Este teste é a guarda contra
+  // a frase voltar sem ninguém perceber o custo que ela reintroduziria.
+  test('não pede mais a transcrição do documento — foi removida por custo', () => {
     const blocos = conteudoDePdf('QkFTRTY0')
-    expect(blocos[1].text).toMatch(/texto_extraido/)
+    expect(blocos[1].text).not.toMatch(/transcri/i)
   })
 })
 
@@ -99,20 +102,6 @@ describe('conteudoDeTexto', () => {
   test('não pede transcrição: o texto já veio do navegador', () => {
     const blocos = conteudoDeTexto('Maria Silva')
     expect(blocos[0].text).not.toMatch(/texto_extraido/)
-  })
-})
-
-// A regra "deixe null fora do caminho de PDF" saiu do texto do prompt (teste
-// acima) e foi morar na descrição do campo no schema, que viaja em
-// output_config.format.schema — ver PerfilSchema em perfil.js. Sem este
-// teste, um `.describe()` apagado numa edição futura não deixaria nada
-// vermelho: o modelo voltaria a preencher texto_extraido também fora do PDF,
-// gastando ~3.000 tokens de saída à toa em todo upload de .docx ou texto
-// colado, com a suíte inteira verde.
-describe('PerfilSchema — descrição de texto_extraido no schema', () => {
-  test('a descrição do campo manda deixar null fora do caminho de PDF', () => {
-    const { schema } = zodOutputFormat(PerfilSchema)
-    expect(schema.properties.texto_extraido.description).toMatch(/null/i)
   })
 })
 
@@ -139,7 +128,7 @@ describe('conferirPerfil', () => {
 // ponta — monta a chamada, lê parsed_output, valida — com `chamarEstruturado`
 // mockado (ver vi.mock('./claude') no topo do arquivo). Zero rede.
 describe('extrairPerfil', () => {
-  test('caminho PDF: manda bloco document+text, max_tokens 8000, TIPOS.PERFIL, e devolve o perfil validado', async () => {
+  test('caminho PDF: manda bloco document+text, max_tokens 2000, TIPOS.PERFIL, e devolve o perfil validado', async () => {
     chamarEstruturado.mockClear()
     chamarEstruturado.mockResolvedValue({ parsed_output: PERFIL_BOM })
 
@@ -149,7 +138,9 @@ describe('extrairPerfil', () => {
     expect(chamarEstruturado).toHaveBeenCalledTimes(1)
     const [tipo, params] = chamarEstruturado.mock.calls[0]
     expect(tipo).toBe(TIPOS.PERFIL)
-    expect(params.max_tokens).toBe(8000)
+    // 2000, não mais 8000: a folga era só para o texto_extraido do PDF
+    // (removido por custo — ver conteudoDePdf em perfil.js).
+    expect(params.max_tokens).toBe(2000)
     expect(params.messages).toHaveLength(1)
     expect(params.messages[0].role).toBe('user')
     const conteudo = params.messages[0].content
