@@ -126,6 +126,7 @@ export default function PainelIA({
   instrucao,
   onInstrucao,
   onRestaurar,
+  onCusto,
 }) {
   const [lendo, setLendo] = useState(false)
   const [erro, setErro] = useState(null)
@@ -214,6 +215,11 @@ export default function PainelIA({
       setErro(mensagemDoErro(err))
     } finally {
       setLendo(false)
+      // O `App` guarda o estado de custo, não este painel — por isso o
+      // callback, chamado tanto no sucesso quanto no erro: um teto atingido
+      // não registra chamada nova, mas reler não custa nada e mantém o
+      // cartão da aba Controle sempre fiel ao que está no localStorage.
+      onCusto()
     }
   }
 
@@ -240,6 +246,7 @@ export default function PainelIA({
       setErro(mensagemDoErro(err))
     } finally {
       setLendo(false)
+      onCusto()
     }
   }
 

@@ -10,12 +10,13 @@ import {
   usadas,
   zerarContagem,
 } from './cota'
-import { mensagemDoErro } from './api/claude'
+import { mensagemDoErro, TIPOS } from './api/claude'
 import { ErroJSearch, buscarVagas, montarConsulta, vagasDaResposta } from './api/jsearch'
 import { justificar } from './api/justificativa'
 import { mapearVagas } from './api/mapear'
 import { ranquear } from './api/ranking'
 import { definirInstrucao, lerCurriculo, perfilEfetivo } from './curriculo'
+import { dolares, lerCusto, zerarCusto } from './custo'
 import CampoCidade from './paineis/CampoCidade'
 import { AvisoErro, Carregando } from './paineis/comuns'
 import PainelIA from './paineis/PainelIA'
@@ -1799,7 +1800,7 @@ function ModalNovaVaga({ form, onCampo, onFechar, onSalvar }) {
  * chega primeiro ao que já sabemos da vaga, e sai para o anúncio original se
  * quiser mesmo se candidatar.
  */
-function PaginaVaga({ vaga, onVoltar, cv, instrucao }) {
+function PaginaVaga({ vaga, onVoltar, cv, instrucao, onCusto }) {
   const d = derivar(vaga)
 
   // Não persiste: reabrir a vaga (ou trocar de aba e voltar) refaz a
@@ -1819,6 +1820,9 @@ function PaginaVaga({ vaga, onVoltar, cv, instrucao }) {
       setErroJustificativa(mensagemDoErro(err))
     } finally {
       setJustificando(false)
+      // `PaginaVaga` não guarda o estado de custo — é do `App` — por isso o
+      // callback em vez de reler direto.
+      onCusto()
     }
   }
 
@@ -2078,7 +2082,7 @@ function PaginaVaga({ vaga, onVoltar, cv, instrucao }) {
  * *haveria*. O mecanismo já é o definitivo — quando a chamada real entrar, o
  * número passa a ser o de verdade sem mexer nesta tela.
  */
-function PainelControle({ cota, onZerar, onLimparCache }) {
+function PainelControle({ cota, onZerar, onLimparCache, custo, onZerarCusto }) {
   const gastas = usadas(cota)
   const doCache = servidasDoCache(cota)
   const restantes = Math.max(0, LIMITE_MENSAL - gastas)
@@ -2086,6 +2090,15 @@ function PainelControle({ cota, onZerar, onLimparCache }) {
 
   // Verde até a metade, âmbar a partir de 75%, vermelho perto do teto.
   const cor = fracao >= 0.9 ? '#F87171' : fracao >= 0.75 ? '#D9A441' : '#4ADE80'
+
+  // Mesma lógica de cor do cartão do JSearch, mas contra o teto em dólar —
+  // que é nosso, não do provedor (ver custo.js).
+  const gastoClaude = dolares(custo.chamadas)
+  const fracaoClaude = custo.teto > 0 ? gastoClaude / custo.teto : 0
+  const corClaude =
+    fracaoClaude >= 0.9 ? '#F87171' : fracaoClaude >= 0.75 ? '#D9A441' : '#4ADE80'
+  const porTipo = (tipo) =>
+    dolares(custo.chamadas.filter((c) => c.tipo === tipo))
 
   const cartao = {
     border: '1px solid rgba(255,255,255,0.07)',
@@ -2177,6 +2190,56 @@ function PainelControle({ cota, onZerar, onLimparCache }) {
           {cota.desde ? `, iniciado em ${fmtDataHora(cota.desde, false)}` : ''}.
           {' '}O plano gratuito renova pela data da assinatura, não pelo dia 1º —
           zere a contagem à mão quando ele virar.
+        </div>
+      </div>
+
+      {/* As 200 requisições acima têm teto do JSearch — quando acabam, acabam.
+          A Claude não tem teto do lado do provedor: ela só para quando o
+          cartão para. Por isso este cartão é separado, em dólar (não R$: uma
+          conversão exigiria cotação que o app não tem, e o número sairia
+          inventado), e o teto que aparece nele é nosso, local, não da API. */}
+      <div style={cartao}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'baseline',
+            justifyContent: 'space-between',
+            gap: 16,
+            flexWrap: 'wrap',
+            marginBottom: 10,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'baseline', gap: 10 }}>
+            <span style={{ fontSize: 26, fontWeight: 700, color: corClaude }}>
+              US$ {gastoClaude.toFixed(2)}
+            </span>
+            <span style={{ fontSize: 14, color: '#8A94A6' }}>
+              gastos com a Claude neste ciclo
+            </span>
+          </div>
+          <button
+            onClick={onZerarCusto}
+            className="bg-[#0E1729] text-[#C8D1E0] hover:bg-[#152039]"
+            style={botao}
+          >
+            Zerar custo
+          </button>
+        </div>
+
+        <div style={{ fontSize: 13, color: '#8A94A6', lineHeight: 1.6, marginBottom: 10 }}>
+          Perfil: US$ {porTipo(TIPOS.PERFIL).toFixed(2)} · Ranking: US${' '}
+          {porTipo(TIPOS.RANKING).toFixed(2)} · Justificativa: US${' '}
+          {porTipo(TIPOS.JUSTIFICATIVA).toFixed(2)}
+        </div>
+
+        <div style={{ fontSize: 13, color: '#8A94A6', lineHeight: 1.6 }}>
+          Teto:{' '}
+          <strong style={{ color: '#E8ECF4', fontWeight: 600 }}>
+            US$ {custo.teto.toFixed(2)}
+          </strong>
+          . Diferente das 200 requisições acima, este teto não é do provedor —
+          é nosso, local a este navegador, e bloqueia a chamada antes de ela
+          sair. A Claude, do lado dela, aceitaria gastar sem limite.
         </div>
       </div>
 
@@ -2320,6 +2383,14 @@ export default function App() {
   // atravessa o recarregamento. Lida na inicialização preguiçosa para não
   // tocar no storage a cada render.
   const [cota, setCota] = useState(lerCota)
+
+  // Mesma ideia para o custo da Claude, mas quem grava é `custo.js`, chamado
+  // de dentro de `api/claude.js` a cada resposta — o `App` não registra
+  // chamada nenhuma, só relê depois. `custo` é o cartão da aba Controle;
+  // relemos no `finally` de cada função que efetivamente chama a Claude
+  // (`ranquearBanco`, `ranquearIa`, a justificativa em `PaginaVaga`) e via
+  // callback no `PainelIA`, porque o estado é daqui.
+  const [custo, setCusto] = useState(() => lerCusto())
 
   const [ordem, setOrdem] = useState('rank')
   const [direcao, setDirecao] = useState('desc')
@@ -2539,6 +2610,9 @@ export default function App() {
       setErroRanking(mensagemDoErro(err))
     } finally {
       setRanqueando(false)
+      // A chamada à Claude do `buscar()` inteiro é esta — relê aqui, não em
+      // `buscar()`, porque é aqui que `ranquear` de fato roda.
+      setCusto(lerCusto())
     }
   }
 
@@ -2560,6 +2634,9 @@ export default function App() {
       setErroIa(mensagemDoErro(err))
     } finally {
       setRanqueandoIa(false)
+      // Mesmo raciocínio de `ranquearBanco`: a chamada à Claude de
+      // `buscarInteligente()` acontece aqui dentro.
+      setCusto(lerCusto())
     }
   }
 
@@ -2732,6 +2809,7 @@ export default function App() {
             onVoltar={fecharVaga}
             cv={cv}
             instrucao={instrucao}
+            onCusto={() => setCusto(lerCusto())}
           />
         )}
 
@@ -2887,6 +2965,7 @@ export default function App() {
               setInstrucao(INSTRUCAO_PADRAO)
               definirInstrucao(INSTRUCAO_PADRAO)
             }}
+            onCusto={() => setCusto(lerCusto())}
           />
         )}
 
@@ -2913,6 +2992,8 @@ export default function App() {
             cota={cota}
             onZerar={() => setCota(zerarContagem())}
             onLimparCache={() => setCota(limparCache())}
+            custo={custo}
+            onZerarCusto={() => setCusto(zerarCusto())}
           />
         )}
       </main>
