@@ -285,9 +285,6 @@ export default function PainelVagaInteligente({
 }
 
 /**
- * O resultado da busca inteligente. Enquanto nada está conectado, o honesto é
- * nomear as três integrações que faltam — senão a tela parece só quebrada.
- *//**
  * O resultado da busca inteligente.
  *
  * Antes daqui existir de verdade, este componente mostrava um texto listando

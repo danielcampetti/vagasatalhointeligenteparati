@@ -23,8 +23,12 @@ import PainelIA from './paineis/PainelIA'
 import PainelVagaInteligente from './paineis/PainelVagaInteligente'
 
 /* ------------------------------------------------------------------ *
- * Protótipo frio: todo o estado vive em memória, nesta página.
- * Nada aqui faz requisição de rede — recarregar volta ao estado inicial.
+ * Protótipo com rede de verdade: a busca (JSearch) e a Avaliação IA
+ * (Claude, via api/claude.js) saem daqui — as duas só funcionam com
+ * `npm run dev`, que sobe o proxy que injeta as chaves.
+ * O estado da tela em si é só memória, mas nem tudo se perde no F5:
+ * `curriculo.js`, `custo.js` e `cota.js` gravam em localStorage
+ * (`vagas:cv`, `vagas:custo`, `vagas:cota`), e isso sobrevive.
  * ------------------------------------------------------------------ */
 
 const COLUNAS =
@@ -1928,7 +1932,12 @@ function PaginaVaga({ vaga, onVoltar, cv, instrucao, onCusto }) {
             </span>
           ) : (
             <span style={{ fontSize: 13, color: '#6E7789' }}>
-              Rank IA — a comparação com o currículo ainda não roda
+              {/* `vaga.rank` null cobre dois casos que o dado não distingue:
+                  o ranking nunca rodou, ou rodou e esta vaga não pontuou
+                  (ver o caminho degradado em ranking.js). Na prática, quem
+                  chega nesta página já passou pelo ranking — dizer "ainda
+                  não roda" era falso justo no caso comum. */}
+              Rank IA — a comparação rodou e esta vaga não recebeu nota
             </span>
           )}
         </div>
