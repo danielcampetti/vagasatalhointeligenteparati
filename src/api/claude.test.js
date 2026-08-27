@@ -1,7 +1,7 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { PRECOS, definirTeto, lerCusto, registrarChamada } from '../custo'
-import configVite from '../../vite.config.js'
+import configVite, { guardaDeChave } from '../../vite.config.js'
 import {
   ErroClaude,
   MODELO,
@@ -414,16 +414,20 @@ describe('C-1 — baseURL absoluta e rewrite do proxy (regressão)', () => {
 })
 
 describe('guardaDeChave — x-should-retry (regressão)', () => {
-  // Invoca a guarda de verdade (não uma reimplementação): pega o plugin pelo
-  // nome, chama configureServer com um `server` falso pra capturar o
-  // middleware, e o middleware com um `res` falso pra capturar os headers.
-  // Sem chave no ambiente de teste (o mesmo motivo do aviso "[claude]
-  // ANTHROPIC_API_KEY ausente" em toda rodada), então a guarda dispara de
-  // verdade — se disparasse `next()`, o teste abaixo derrubaria sozinho.
-  function capturarHeadersDaGuarda(nomePlugin) {
-    const config = configVite({ mode: 'development' })
-    const plugin = config.plugins.find((p) => p?.name === nomePlugin)
-    expect(plugin).toBeTruthy()
+  // Invoca a fábrica de verdade (não uma reimplementação): chama
+  // `guardaDeChave` diretamente com `chave: undefined`, em vez de montar a
+  // config inteira via `configVite` e contar com a ausência de
+  // ANTHROPIC_API_KEY no .env de quem roda o teste. Passar a ausência de
+  // chave como argumento explícito, em vez de depender do `loadEnv` real,
+  // é o que torna a reprodutibilidade do teste uma propriedade do código —
+  // e não de quais chaves existem na máquina de quem roda `npm test`.
+  function capturarHeadersDaGuarda() {
+    const plugin = guardaDeChave({
+      nome: 'claude',
+      prefixo: '/api/claude',
+      chave: undefined,
+      variavel: 'ANTHROPIC_API_KEY',
+    })
 
     let handler
     plugin.configureServer({
@@ -438,7 +442,7 @@ describe('guardaDeChave — x-should-retry (regressão)', () => {
       end: () => {},
     }
     handler({}, res, () => {
-      throw new Error('não devia chamar next() — sem chave no ambiente de teste')
+      throw new Error('não devia chamar next() — chave é undefined explicitamente')
     })
     return headers
   }
@@ -447,16 +451,15 @@ describe('guardaDeChave — x-should-retry (regressão)', () => {
     // Sem isto, 5xx é retentável por padrão no SDK (client.ts > shouldRetry)
     // e o aluno espera ~1,4s de espera morta, em três tentativas, vendo nada
     // — a chave ausente não vai aparecer numa segunda tentativa.
-    const headers = capturarHeadersDaGuarda('guarda-de-chave-claude')
+    const headers = capturarHeadersDaGuarda()
     expect(headers['x-should-retry']).toBe('false')
   })
 
-  // Não há um teste em runtime equivalente para a guarda do JSearch aqui:
-  // este projeto já tem uma JSEARCH_API_KEY real no .env (só falta a da
-  // Claude), então a guarda do JSearch cai no `next()` e nunca chega a
-  // escrever headers — forçar o outro caminho exigiria mexer no
-  // vite.config.js além da linha autorizada, ou mockar `loadEnv`, nenhum dos
-  // dois vale o teste. A garantia aqui é estrutural, não de runtime: o
+  // Não há um teste em runtime equivalente para a guarda do JSearch aqui: o
+  // mesmo truque de cima (chamar `guardaDeChave` direto, com
+  // `chave: undefined`) funcionaria igual trocando nome/prefixo/variavel
+  // para 'jsearch' — não há impedimento técnico, seria só redundante. A
+  // garantia aqui é estrutural, não de runtime: o
   // `res.setHeader('x-should-retry', 'false')` está dentro do corpo
   // compartilhado de `guardaDeChave`, sem `if` nenhum sobre `nome` — é a
   // mesma função, com o mesmo corpo, para as duas guardas (só `nome`,

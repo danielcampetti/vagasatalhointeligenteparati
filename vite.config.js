@@ -15,7 +15,7 @@ const PREFIXO_CLAUDE = '/api/claude'
  * `configureServer` roda antes dos middlewares internos do Vite, então este
  * tem prioridade sobre o proxy.
  */
-function guardaDeChave({ nome, prefixo, chave, variavel }) {
+export function guardaDeChave({ nome, prefixo, chave, variavel }) {
   return {
     name: `guarda-de-chave-${nome}`,
     configureServer(server) {
