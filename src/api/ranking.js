@@ -34,12 +34,39 @@ import { TIPOS, chamarEstruturado } from './claude'
 
 export const TAMANHO_LOTE = 12
 
+/**
+ * Sem `min`/`max` em número e sem `max` em string, de propósito — mas **com**
+ * `.int()`. A diferença entre os dois casos é o que vale entender aqui.
+ *
+ * `integer` é um tipo que a saída estruturada suporta: a API o impõe na hora
+ * de gerar, então a nota chega inteira e pronto.
+ *
+ * `minimum`, `maximum` e `maxLength` **não** são suportados. O
+ * `zodOutputFormat` não os descarta: ele os serializa para dentro da
+ * `description` do campo, depois do texto de um `.describe()` explícito.
+ * Medido contra o SDK instalado, `z.number().int().min(0).max(100)` sai como
+ * `{"type":"integer","description":"{minimum: 0, maximum: 100}"}`. O modelo
+ * até recebe a faixa; recebe como lixo serializado em vez de instrução.
+ *
+ * O problema não é esse. É que o SDK revalida a resposta contra o schema
+ * inteiro do lado do cliente, e essa revalidação é tudo-ou-nada: **uma** nota
+ * fora da faixa, ou **um** motivo longo demais, faz o `parsed_output` vir null
+ * e leva o lote inteiro junto. As outras onze notas, boas, morrem com a ruim.
+ *
+ * É o oposto do que este módulo existe para fazer. O `validarNotas` logo
+ * abaixo já filtra por item — descarta a nota inválida e mantém o resto. Ele é
+ * o lugar certo para a faixa, e agora é o único.
+ *
+ * A faixa vai ao modelo pelo `.describe()`, que é texto de verdade. O preço é
+ * que o `.int()` gruda os limites de inteiro seguro do JS ali no fim; é feio,
+ * mas é ruído inofensivo, e vale menos que perder a garantia do tipo.
+ */
 export const NotasSchema = z.object({
   notas: z.array(
     z.object({
       id: z.string(),
-      nota: z.number().int().min(0).max(100),
-      motivo: z.string().max(90),
+      nota: z.number().int().describe('Nota de 0 a 100.'),
+      motivo: z.string().describe('Motivo em até 10 palavras.'),
     }),
   ),
 })

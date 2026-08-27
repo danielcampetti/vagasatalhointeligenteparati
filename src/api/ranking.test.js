@@ -1,3 +1,4 @@
+import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import { describe, expect, test, vi } from 'vitest'
 // `chamarEstruturado` é o único ponto de contato com a rede — mockado aqui
 // para que `ranquear` seja testado de ponta a ponta (monta a chamada, valida
@@ -151,13 +152,26 @@ describe('NotasSchema', () => {
     ).not.toThrow()
   })
 
-  test('nota fora de 0-100 é rejeitada no schema', () => {
+  // O schema NÃO carrega a faixa de propósito. Se carregasse, a revalidação
+  // do SDK no cliente é tudo-ou-nada: uma nota ruim derrubaria o lote inteiro
+  // e mataria as outras onze notas boas junto. Quem aplica a faixa é o
+  // `validarNotas`, por item. Veja o comentário do NotasSchema.
+  test('nota fora de 0-100 passa pelo schema — quem filtra é o validarNotas', () => {
     expect(() =>
       NotasSchema.parse({ notas: [{ id: 'a1', nota: 150, motivo: 'x' }] }),
-    ).toThrow()
+    ).not.toThrow()
   })
 
-  test('nota fracionária é rejeitada', () => {
+  test('a descrição da nota diz a faixa ao modelo, já que o schema não a impõe', () => {
+    const { schema } = zodOutputFormat(NotasSchema)
+    expect(schema.properties.notas.items.properties.nota.description).toMatch(
+      /0 a 100/,
+    )
+  })
+
+  // `integer` é suportado pela saída estruturada e imposto na geração, então
+  // continua no schema — diferente de minimum/maximum, que não são.
+  test('nota fracionária é rejeitada: o tipo integer permanece', () => {
     expect(() =>
       NotasSchema.parse({ notas: [{ id: 'a1', nota: 80.5, motivo: 'x' }] }),
     ).toThrow()
