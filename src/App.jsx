@@ -1943,8 +1943,12 @@ function PaginaVaga({ vaga, onVoltar, cv, instrucao }) {
       </div>
 
       {/* Só existe nota para justificar quando o ranking já rodou — uma vaga
-          sem `rank` não tem o que explicar. */}
-      {vaga.rank !== null && (
+          sem `rank` não tem o que explicar. E só faz sentido chamar a API
+          se ainda houver perfil: se o currículo foi removido depois de
+          ranquear, `cv` é `null` e a nota que sobrou é resto de um perfil
+          que não está mais lá — sem o `cv?.perfil` aqui, o clique gastaria
+          uma chamada paga só para comparar a vaga com nada. */}
+      {vaga.rank !== null && cv?.perfil && (
         <div style={cartao}>
           <div style={legenda}>Por que esta nota?</div>
 
