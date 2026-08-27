@@ -310,7 +310,7 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 
 ```bash
 npm run dev        # a busca e a Avaliação IA só funcionam aqui — porta 5173, caminho /vagasatalhointeligenteparati/
-npm test           # vitest — 111 testes, 7 arquivos
+npm test           # vitest — 120 testes, 7 arquivos
 npm run lint       # oxlint (não pega no-undef hoje; veja a pendência 6)
 npm run build      # gera dist/
 npm run cidades    # regenera src/data/cidades.js a partir do IBGE
