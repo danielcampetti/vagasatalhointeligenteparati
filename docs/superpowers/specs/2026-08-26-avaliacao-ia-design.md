@@ -98,20 +98,28 @@ O que o SDK entrega e que não vale reescrever à mão: erros tipados
 (`RateLimitError`, `BadRequestError`, `APIError`), retry, e `messages.parse()`,
 que valida a saída estruturada contra o schema. Custo: ~100 KB no bundle.
 
-**Modelo:** `claude-opus-5`, num só lugar (`src/api/claude.js`). Pensamento
-adaptativo é o padrão nesse modelo e fica como está. `output_config.effort`
-começa no padrão (`high`); baixar para `medium` é uma linha, mas só depois de
-medir se as notas mudam.
+**Modelo:** `claude-sonnet-5`, num só lugar (`src/api/claude.js`).
 
-Sem streaming: as saídas são pequenas. `max_tokens` de 2.000 no ranking e 8.000
-na extração — esta última precisa de folga por causa do `texto_extraido`
-(seção 3).
+**Atualizado em 27/08:** era `claude-opus-5` até o usuário questionar o custo
+da feature. Sonnet 5 sai a US$ 2 / US$ 10 por 1M de tokens de entrada/saída,
+contra US$ 5 / US$ 25 do Opus 5 — mais de 2× mais barato dos dois lados, sem
+mexer no desenho do lote de ranking (perfil + instrução + N vagas numa
+chamada só, seção 4). Nenhum `thinking` nem `effort` é passado: o cliente já
+não mandava nenhum dos dois antes da troca, e continuar omitindo é o
+comportamento correto neste modelo — a frase antiga sobre "pensamento
+adaptativo no padrão" e `output_config.effort` valia para o Opus 5 e saiu
+junto com ele.
+
+Sem streaming: as saídas são pequenas. `max_tokens` de 2.000 nas três
+chamadas (perfil, ranking, justificativa). A extração já teve 8.000, com
+folga para o `texto_extraido` (seção 3) — o campo saiu do schema e o valor
+voltou a 2.000.
 
 ### 2.3 Módulos
 
 | arquivo | trabalho | depende de |
 |---|---|---|
-| `src/api/claude.js` | cliente apontado ao proxy, modelo e effort num lugar só, erros | SDK |
+| `src/api/claude.js` | cliente apontado ao proxy, modelo num lugar só, erros | SDK |
 | `src/api/perfil.js` | PDF ou texto → perfil estruturado | `claude.js` |
 | `src/docx.js` | `.docx` → texto, no navegador | `mammoth` |
 | `src/api/ranking.js` | perfil + N vagas → `[{id, nota, motivo}]`, com validação | `claude.js` |
@@ -177,37 +185,52 @@ Saída da chamada de upload, via `output_config.format` com todos os campos
     { nome: "Docker", profundidade: "contato",  anos: null }
   ],
   formacao: "Tecnólogo em ADS (cursando)",
-  resumo: "Suporte técnico migrando para desenvolvimento backend.",
-  texto_extraido: "..."               // só quando a entrada foi PDF; null nos outros
+  resumo: "Suporte técnico migrando para desenvolvimento backend."
 }
 ```
 
 `profundidade`: `producao` | `projeto` | `contato`.
 
-### `texto_extraido`: a lacuna do PDF
+### A lacuna do PDF: existiu, foi resolvida, foi retirada por custo
 
-O texto cru do currículo fica guardado para alimentar a justificativa detalhada.
-Com `.docx` e texto colado isso é trivial — o texto já existe antes da chamada.
-**Com PDF não existe:** quem leu o arquivo foi a Claude, e o navegador nunca viu
-o conteúdo.
+**A lacuna:** o texto cru do currículo fica guardado para alimentar a
+justificativa detalhada (seção 4). Com `.docx` e texto colado isso é
+trivial — o texto já existe antes da chamada. Com PDF não existia: quem lê o
+arquivo é a Claude, e o navegador nunca viu o conteúdo.
 
-A saída: a chamada de extração devolve o texto junto, transcrito literalmente,
-no mesmo passo. Custa ~3.000 tokens de saída, ~US$ 0,075, **uma vez por
-currículo** — a extração vai de ~US$ 0,04 para ~US$ 0,11.
+**Como foi resolvida (desenho original deste documento):** um campo
+`texto_extraido` no schema, preenchido só no caminho de PDF, pedindo que a
+Claude transcrevesse o documento inteiro literalmente na mesma chamada que
+extraía o perfil. Funcionava — inclusive para PDF escaneado, onde é a única
+forma de obter texto sem OCR próprio — mas custava ~3.000 tokens de saída por
+currículo, ~US$ 0,075 no preço do Opus 5, sozinho mais caro que o resto da
+extração inteira.
 
-As alternativas, e por que não:
+**Atualizado em 27/08: retirada por custo.** O usuário questionou o gasto da
+feature; entre as medidas escolhidas, tirar `texto_extraido` foi uma. Ele
+existia só para alimentar a justificativa detalhada, e essa chamada já tem
+fallback testado para quando o texto cru não existe (`justificativa.js`,
+`montarPrompt`: "use só o perfil"). O campo saiu do `PerfilSchema`, a frase
+que pedia a transcrição saiu do prompt de `conteudoDePdf`, e `max_tokens` da
+extração voltou de 8.000 para 2.000 — a folga só existia por causa dele.
 
-- **`pdfjs-dist` no navegador** — mais ~300 KB de bundle, e devolve *vazio* para
-  currículo escaneado, que é justamente o caso que a Claude resolve. Trocaria um
-  custo de uma vez por um modo de falha permanente.
+**Consequência assumida, não escondida:** para PDF, nenhum texto cru fica
+guardado — `curriculo.js` grava `texto: ''` — e a justificativa detalhada cai
+no fallback de "use só o perfil". Ela sai mais pobre para quem envia PDF do
+que para quem envia `.docx` ou cola o texto, que sempre têm o texto cru
+porque o navegador já extraiu antes de qualquer chamada à Claude. Se o custo
+cair o bastante para justificar de novo, a solução acima continua válida — é
+só reintroduzir o campo.
+
+As alternativas que já tinham sido descartadas quando a transcrição existia
+continuam descartadas agora que ela também saiu — nenhuma fecha a lacuna sem
+custo, e a decisão atual é aceitar a lacuna em vez de pagar por fechá-la:
+
+- **`pdfjs-dist` no navegador** — mais ~300 KB de bundle, e devolve *vazio*
+  para currículo escaneado, que é justamente o caso que a Claude resolve
+  nativamente.
 - **Guardar o PDF em base64** — 5 MB de arquivo viram ~6,7 MB de base64 e
   estouram o `localStorage` inteiro.
-
-Para PDF escaneado, a transcrição da Claude é a **única** forma de obter texto.
-O que era o modo de falha "PDF que é foto" vira caso atendido — e a checagem de
-`tecnologias` vazio continua pegando o scan realmente ilegível.
-
-`max_tokens` da chamada de extração sobe para 8.000 por causa desse campo.
 
 ### Regras
 
@@ -289,33 +312,46 @@ compatibilidade", é uma afirmação que não se sustenta entre duas buscas.
 ### Custo estimado
 
 Com descrição de vaga em ~1.000 tokens, perfil em ~500 e instrução em ~300, no
-`claude-opus-5` (US$ 5 / US$ 25 por 1M):
+`claude-sonnet-5` (US$ 2 / US$ 10 por 1M):
 
 | | por vaga (10 chamadas) | **lote de 10** |
 |---|---|---|
 | entrada | ~43.000 tk | ~13.300 tk |
 | saída | ~1.500 tk | ~270 tk |
-| custo | ~US$ 0,25 | **~US$ 0,07** |
+| custo | ~US$ 0,10 | **~US$ 0,03** |
 
-A extração do perfil custa ~US$ 0,11 por PDF (a transcrição do `texto_extraido`
-é a maior parte) e ~US$ 0,02 por `.docx` ou texto colado, uma vez por currículo.
+Estimativa, não medição — os volumes de token já eram aproximados antes da
+troca de modelo. **Atualizado em 27/08:** era `claude-opus-5` (US$ 5 / US$ 25
+por 1M), que dava ~US$ 0,25 por vaga e ~US$ 0,07 por lote de 10 nos mesmos
+volumes; só o preço mudou, não a estimativa de tokens.
+
+A extração do perfil custa ~US$ 0,01–0,02 por currículo, PDF incluído, uma vez
+por upload. **Atualizado em 27/08:** antes de `texto_extraido` sair do schema
+(seção 3), o PDF custava ~US$ 0,11 — a transcrição sozinha respondia por
+~US$ 0,075 disso, no preço do Opus 5. Sem ela, e no preço novo do Sonnet 5 (o
+mesmo fator ~0,4× da tabela acima), a extração por PDF volta à mesma ordem de
+grandeza de `.docx`/texto colado — estimativa, não medição.
 
 ### O que cada chamada recebe
 
 | chamada | recebe | devolve |
 |---|---|---|
-| perfil | PDF em base64 **ou** texto (do `mammoth` ou colado) | o perfil estruturado, mais `texto_extraido` quando a entrada foi PDF |
+| perfil | PDF em base64 **ou** texto (do `mammoth` ou colado) | o perfil estruturado |
 | ranking | instrução + perfil efetivo + as N vagas (título, empresa, cidade, modalidade, faixa, dias, descrição) | `[{id, nota, motivo}]` |
-| justificativa | instrução + perfil efetivo + **texto cru do currículo** + uma vaga | prosa, alguns parágrafos |
+| justificativa | instrução + perfil efetivo + **texto cru do currículo, quando existe** + uma vaga | prosa, alguns parágrafos |
 
-A justificativa é a única que recebe o texto cru — é para isso que ele fica
-guardado. Nas outras duas o perfil basta, e é justamente o que torna o ranking
+**Atualizado em 27/08:** a justificativa recebe o texto cru quando ele existe.
+`.docx` e texto colado sempre têm; PDF não tem mais, desde que
+`texto_extraido` saiu (seção 3) — nesse caso `justificativa.js` cai no
+fallback testado de "use só o perfil" (`montarPrompt`). Nas outras duas
+chamadas o perfil sempre bastou, e é justamente o que torna o ranking
 barato.
 
 Ela é **sob demanda**, quando o usuário abre a página de detalhe da vaga, e o
 resultado fica em memória enquanto a vaga estiver aberta. Não persiste: reabrir
-a mesma vaga refaz a chamada. Custa ~US$ 0,02 e evita mais um cache para
-invalidar quando o perfil mudar.
+a mesma vaga refaz a chamada. Custa ~US$ 0,01 (atualizado em 27/08 pelo preço
+do Sonnet 5; era ~US$ 0,02 no Opus 5 — estimativa, não medição) e evita mais
+um cache para invalidar quando o perfil mudar.
 
 ---
 
@@ -327,7 +363,7 @@ Chave `vagas:cv`, separada de `vagas:cota`:
 {
   versao: 1,
   arquivo:   { nome, tamanho, quando },
-  texto:     "...",        // cru, 3-8 KB
+  texto:     "...",        // cru, 3-8 KB; '' para PDF (seção 3)
   perfil:    { ... },      // o que a IA extraiu
   correcoes: { ... },      // só os campos que o usuário mudou
   instrucao: "..."         // só se diferente do padrão
@@ -344,9 +380,12 @@ entendeu", impossível se a correção sobrescrever.
 **`versao: 1` porque o schema vai mudar.** Versão desconhecida → descarta e pede
 o currículo de novo. Não tentar migrar.
 
-**O texto cru fica guardado** para a justificativa detalhada e para re-derivar o
-perfil quando o schema mudar. Vem do `mammoth` (`.docx`), da textarea (colado)
-ou do `texto_extraido` da própria chamada (PDF) — três origens, um campo só.
+**O texto cru fica guardado, quando existe,** para a justificativa detalhada e
+para re-derivar o perfil quando o schema mudar. Vem do `mammoth` (`.docx`) ou
+da textarea (colado) — duas origens, um campo só. **Atualizado em 27/08:**
+havia uma terceira origem, o `texto_extraido` da própria chamada de extração
+(PDF); saiu por custo (seção 3, "A lacuna do PDF"). Para PDF, `texto` grava
+`''`, e a justificativa cai no fallback de perfil-só.
 
 **A instrução entra aqui.** Hoje é `useState(INSTRUCAO_PADRAO)` e some no F5 — o
 aluno escreve 150 palavras de critério, aperta F5, perdeu. Mesmo argumento que
@@ -471,8 +510,9 @@ painéis ficam onde estão — isso é a pendência 11, não este trabalho.
 | `.doc` fora, textarea no lugar | Sem servidor não há extração de Word binário. A textarea cobre `.doc`, `.odt`, LinkedIn e o que vier |
 | `.docx` com `mammoth` | É o formato mais comum de currículo. Alimenta o mesmo caminho da textarea, então não cria um terceiro fluxo |
 | PDF pela Claude, não por `pdfjs` | `pdfjs` devolve vazio para currículo escaneado. A Claude lê o scan, e isso são ~300 KB de bundle a menos |
-| `texto_extraido` vem na mesma chamada | Com PDF o navegador nunca vê o texto. ~US$ 0,075 uma vez por currículo, contra 300 KB de bundle e um modo de falha permanente |
-| Justificativa não persiste | Reabrir a vaga refaz a chamada, ~US$ 0,02. Guardar exigiria mais um cache para invalidar quando o perfil mudar |
+| `texto_extraido` vem na mesma chamada | Com PDF o navegador nunca vê o texto. ~US$ 0,075 uma vez por currículo, contra 300 KB de bundle e um modo de falha permanente. **Atualizado em 27/08: retirado por custo** — ver seção 3, "A lacuna do PDF" |
+| Modelo `claude-sonnet-5`, não `claude-opus-5` | **Decisão de 27/08.** Usuário questionou o custo da feature; Sonnet 5 sai mais de 2× mais barato dos dois lados (US$ 2/US$ 10 vs US$ 5/US$ 25) sem mexer no desenho do lote. Nenhum `thinking`/`effort` foi acrescentado — o cliente já não passava nenhum |
+| Justificativa não persiste | Reabrir a vaga refaz a chamada, ~US$ 0,01 (era ~US$ 0,02 no Opus 5). Guardar exigiria mais um cache para invalidar quando o perfil mudar |
 | Um lote de 10, não 10 chamadas | ~3,5× mais barato: o perfil viaja uma vez e a saída, que custa 5× a entrada, encolhe |
 | `motivo` curto no lote | ~12 tokens por vaga, US$ 0,003 nas dez. Resolve a nota sem explicação |
 | Nota é "Rank IA", não "%" | É relativa ao conjunto da busca. Como ranking serve; como porcentagem, mente entre buscas |

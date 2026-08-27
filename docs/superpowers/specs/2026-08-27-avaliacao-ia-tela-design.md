@@ -9,8 +9,11 @@ módulos já prontos se ligam ao `App.jsx`.
 
 ## 1. Por que este documento existe
 
-A camada de lógica está pronta e testada — 112 testes, oito módulos. E **nada
-disso está ligado**: o `App.jsx` não importa um único módulo novo. O app hoje se
+A camada de lógica está pronta e testada — 111 testes, oito módulos.
+(Atualizado em 27/08: eram 112 quando este documento foi escrito;
+`texto_extraido` saiu do perfil por custo e levou um teste de regressão
+junto — ver `progress-modelo.md` na pasta de acompanhamento.) E **nada disso
+está ligado**: o `App.jsx` não importa um único módulo novo. O app hoje se
 comporta exatamente como antes de a integração começar.
 
 O plano original tratava a tela como três tarefas grandes. Duas coisas obrigam a
@@ -131,13 +134,23 @@ tela.
 
 | o quê | quando grava |
 |---|---|
-| perfil extraído + texto cru | ao terminar a extração |
+| perfil extraído + texto cru, quando existe | ao terminar a extração |
 | cada correção | ao editar o campo |
 | instrução de ranking | ao editar o textarea |
 
 Tudo em `vagas:cv`, pelo `curriculo.js` que já existe. O `App` lê uma vez na
 inicialização (`useState(() => lerCurriculo())`) — hoje ele começa com `null` e
 `INSTRUCAO_PADRAO`, e perde tudo no F5.
+
+**Atualizado em 27/08:** "quando existe" carrega peso. `.docx` e texto colado
+sempre têm texto cru — o navegador já extraiu antes da chamada. PDF não tem
+mais: havia um campo `texto_extraido` que a Claude preenchia junto com o
+perfil, e ele saiu do schema por custo (~US$ 0,075 a mais por upload de PDF —
+ver `2026-08-26-avaliacao-ia-design.md`, seção 3, "A lacuna do PDF"). Para
+PDF, `curriculo.js` grava `texto: ''`, e a página de detalhe da vaga
+("Por que esta nota?", seção 6) cai no fallback de `justificativa.js` — a
+prosa que o aluno lê sai mais pobre para PDF do que para `.docx` ou texto
+colado.
 
 ---
 

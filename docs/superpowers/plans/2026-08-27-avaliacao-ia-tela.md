@@ -19,7 +19,10 @@
 - **Erros dos módulos vão para a tela verbatim**, via `mensagemDoErro`. Não reescreva mensagem de erro na camada de tela.
 - Código e comentários em português, no tom do arquivo: explicar *por quê*.
 - **Nenhuma chamada de rede durante a implementação.** A chave da Claude do usuário está ativa e o gasto não tem teto do lado do provedor. O endpoint do JSearch tem limite duro de 200 requisições/mês na chave real dele. Verificação manual que exija busca fica reservada ao usuário.
-- `npm test` deve seguir em 112/112. Nenhuma tarefa aqui quebra teste existente.
+- `npm test` deve seguir em 111/111 (atualizado em 27/08: era 112/112 quando
+  este plano foi escrito; `texto_extraido` saiu do perfil por custo e levou
+  um teste de regressão junto — ver `progress-modelo.md` na pasta de
+  acompanhamento). Nenhuma tarefa aqui quebra teste existente.
 
 ## Contra as quedas de transporte
 
@@ -81,7 +84,7 @@ import PainelVagaInteligente from './paineis/PainelVagaInteligente'
 
 - [ ] **Step 6: Verificar que nada mudou**
 
-`npm test` → 112/112. `npm run lint` limpo. `npm run build` sem erro — é o que pega import circular ou símbolo perdido.
+`npm test` → 111/111. `npm run lint` limpo. `npm run build` sem erro — é o que pega import circular ou símbolo perdido.
 
 Confira que `src/App.jsx` encolheu ~700 linhas: `wc -l src/App.jsx`.
 
@@ -111,7 +114,7 @@ Nos dois handlers (`onInstrucao` e `onRestaurar`), chamar `definirInstrucao` jun
 
 - [ ] **Step 3: Verificar**
 
-`npm test` 112/112. No navegador: a aba Avaliação IA abre; editar a instrução e dar F5 mantém o texto editado. (O currículo ainda não persiste porque nada o grava — isso é a Tarefa 3.)
+`npm test` 111/111. No navegador: a aba Avaliação IA abre; editar a instrução e dar F5 mantém o texto editado. (O currículo ainda não persiste porque nada o grava — isso é a Tarefa 3.)
 
 - [ ] **Step 4: Commit**
 
@@ -149,15 +152,27 @@ function paraBase64(arquivo) {
 
 - [ ] **Step 4: `enviarArquivo`**
 
-PDF → `{ base64 }`. `.docx` → `extrairDocx` → `{ texto }`. Chama `extrairPerfil`, grava com `gravarCurriculo`, avisa o `App` pelo callback. Para PDF, o texto guardado é `perfil.texto_extraido` (o navegador nunca viu o texto); para `.docx`, o texto que o `mammoth` devolveu.
+PDF → `{ base64 }`. `.docx` → `extrairDocx` → `{ texto }`. Chama `extrairPerfil`, grava com `gravarCurriculo`, avisa o `App` pelo callback. Para `.docx`, o texto guardado é o que o `mammoth` devolveu; **para PDF, `texto` fica vazio (`''`)** — o navegador nunca viu o conteúdo, e `gravarCurriculo` já trata `texto` ausente como `''`.
+
+**Atualizado em 27/08:** esta instrução dizia originalmente para guardar
+`perfil.texto_extraido` no caminho de PDF. Esse campo saiu do `PerfilSchema`
+por custo — pedir à Claude que transcrevesse o documento inteiro junto com o
+perfil custava ~US$ 0,075 a mais por upload, mais que o dobro do resto da
+extração (ver `2026-08-26-avaliacao-ia-design.md`, seção 3, "A lacuna do
+PDF"). A consequência é aceita: para currículo em PDF, a justificativa
+detalhada (Tarefa 8) cai no fallback testado de `justificativa.js` — "use só
+o perfil" — e sai mais pobre do que para `.docx` ou texto colado.
 
 Erro: `setErro(mensagemDoErro(err))`, e a mensagem aparece acima do dropzone, que continua visível.
 
 - [ ] **Step 5: Verificar**
 
-`npm test` 112/112. No navegador, com a chave no `.env`: subir um PDF de currículo → a tela mostra "lendo", depois o currículo aparece; F5 mantém. Subir um `.docx` → mesmo resultado. Subir um arquivo corrompido → mensagem em português com saída.
+`npm test` 111/111. No navegador, com a chave no `.env`: subir um PDF de currículo → a tela mostra "lendo", depois o currículo aparece; F5 mantém. Subir um `.docx` → mesmo resultado. Subir um arquivo corrompido → mensagem em português com saída.
 
-> Esta é a primeira verificação que gasta dinheiro de verdade (~US$ 0,11 por PDF). Uma por formato basta.
+> Esta é a primeira verificação que gasta dinheiro de verdade (~US$ 0,01–0,02
+> por PDF — estimativa, não medição). **Atualizado em 27/08:** era ~US$ 0,11
+> antes de `texto_extraido` sair do schema e do modelo trocar para Sonnet 5
+> (ver Step 4 acima). Uma por formato basta.
 
 - [ ] **Step 6: Commit**
 
@@ -179,7 +194,9 @@ Mesmo caminho do `.docx`: `extrairPerfil({ texto })`. O nome do "arquivo" guarda
 
 - [ ] **Step 3: Verificar**
 
-Colar um currículo em texto e enviar → mesmo resultado do arquivo. Custa ~US$ 0,02.
+Colar um currículo em texto e enviar → mesmo resultado do arquivo. Custa
+~US$ 0,01 (atualizado em 27/08 pelo preço do Sonnet 5; era ~US$ 0,02 no
+Opus 5 — estimativa, não medição).
 
 - [ ] **Step 4: Commit**
 
@@ -280,7 +297,12 @@ Com currículo, escolher cidade e buscar → vagas ranqueadas. A aba Controle mo
 
 - [ ] **Step 3: Verificar**
 
-Abrir uma vaga com nota → botão → parágrafos coerentes com o currículo. Custa ~US$ 0,02.
+Abrir uma vaga com nota → botão → parágrafos coerentes com o currículo. Custa
+~US$ 0,01 (atualizado em 27/08 pelo preço do Sonnet 5; era ~US$ 0,02 no
+Opus 5 — estimativa, não medição). Para currículo enviado como PDF, sem
+texto cru guardado, a resposta sai do fallback de perfil-só de
+`justificativa.js` — mais pobre que para `.docx` ou texto colado (ver Tarefa
+3, Step 4).
 
 - [ ] **Step 4: Commit**
 
@@ -330,4 +352,14 @@ A Avaliação IA funciona **só em `npm run dev`**, como a busca: o site publica
 
 **Sem teste automatizado nas Tarefas 2-9.** São componentes de tela, e o projeto não tem infraestrutura de teste de React — montá-la agora seria um plano próprio. A verificação é manual, no navegador, e cada tarefa traz a sua em uma frase. `npm test` continua rodando a cada passo para garantir que nada dos módulos quebrou.
 
-**Custo em dinheiro real das verificações:** ~US$ 0,11 (PDF) + ~US$ 0,02 (texto colado) + ~US$ 0,07 (ranking) + ~US$ 0,02 (justificativa) ≈ **US$ 0,22 no total**, se cada uma for feita uma vez.
+**Custo em dinheiro real das verificações:** ~US$ 0,02 (PDF) + ~US$ 0,01 (texto colado) + ~US$ 0,03 (ranking) + ~US$ 0,01 (justificativa) ≈ **US$ 0,07 no total**, se cada uma for feita uma vez. Estimativa, não medição.
+
+**Atualizado em 27/08:** o total original, escrito quando este plano ainda
+previa `claude-opus-5` e a transcrição do PDF via `texto_extraido`, era
+~US$ 0,22 (~US$ 0,11 PDF + ~US$ 0,02 texto colado + ~US$ 0,07 ranking +
+~US$ 0,02 justificativa). Duas mudanças de custo, decididas pelo usuário
+depois deste plano ter sido escrito, derrubaram o total de verificação a
+menos de um terço: a troca de modelo para Sonnet 5 (~0,4× o preço do Opus 5
+nos dois lados) e a retirada de `texto_extraido` (que sozinha respondia por
+~US$ 0,075 do custo do PDF). Ver `progress-modelo.md` na pasta de
+acompanhamento e a seção 3 de `2026-08-26-avaliacao-ia-design.md`.
