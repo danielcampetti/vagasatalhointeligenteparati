@@ -2254,10 +2254,17 @@ export default function App() {
   )
 
   // Aba Vaga Inteligente. A cidade é o único critério que o aluno informa: o
-  // cargo sairá do currículo, quando a Claude API entrar.
+  // cargo vem do perfil já extraído do currículo (cargo_deduzido), sem
+  // chamada extra. buscandoIa cobre a etapa JSearch e ranqueandoIa a etapa
+  // Claude — separadas para a lista aparecer antes das notas, como na aba
+  // Vagas. Lista própria (vagasIa): repor `banco` aqui vazaria os resultados
+  // de uma aba para a outra.
   const [cidadeIa, setCidadeIa] = useState('')
+  const [vagasIa, setVagasIa] = useState([])
   const [buscandoIa, setBuscandoIa] = useState(false)
+  const [ranqueandoIa, setRanqueandoIa] = useState(false)
   const [buscaIaFeita, setBuscaIaFeita] = useState(false)
+  const [erroIa, setErroIa] = useState(null)
 
   // Lidas de uma vez, com a forma de função: sem ela, `lerCurriculo()`
   // rodaria a cada render, e não só na montagem.
@@ -2405,6 +2412,29 @@ export default function App() {
   }
 
   /**
+   * Aplica as notas do ranking por id, escrevendo só o que ele produz —
+   * nunca troca a lista inteira. O ranking leva alguns segundos; nesse
+   * intervalo o aluno pode favoritar, arquivar ou marcar como vista, e
+   * `ranqueadas` é a foto da lista de *antes* dessa janela. Repor a lista
+   * inteira com ela apagaria essas ações em silêncio — a estrela se
+   * desmarcaria sozinha, sem erro, sem explicação. Por isso quem chama usa a
+   * forma funcional do respectivo setState: ela lê o estado no momento em
+   * que aplica, não o que foi capturado quando o ranking começou, então uma
+   * vaga arquivada nesse meio-tempo continua fora — iterar sobre
+   * `ranqueadas` a traria de volta por engano.
+   *
+   * Compartilhada entre a aba Vagas (`ranquearBanco`) e a Vaga Inteligente
+   * (`ranquearIa`): a regra é a mesma, só muda qual lista está sendo
+   * mesclada.
+   */
+  function mesclarRank(atual, ranqueadas) {
+    return atual.map((v) => {
+      const r = ranqueadas.find((x) => x.id === v.id)
+      return r ? { ...v, rank: r.rank, rankMotivo: r.rankMotivo } : v
+    })
+  }
+
+  /**
    * Pontua as vagas com a Claude e repõe o banco, se houver currículo. Sem
    * ele não faz nada — o ranking é enriquecimento da aba Vagas, não
    * pré-requisito; quem quer currículo obrigatório usa a Vaga Inteligente.
@@ -2420,22 +2450,7 @@ export default function App() {
     setRanqueando(true)
     try {
       const ranqueadas = await ranquear(perfil, instrucao, vagas)
-      // Mescla por id, escrevendo só o que o ranking produz — nunca
-      // `setBanco(ranqueadas)`. O ranking leva alguns segundos; nesse
-      // intervalo o aluno pode favoritar, arquivar ou marcar como vista, e
-      // `ranqueadas` é a foto do banco de *antes* dessa janela. Repor a
-      // lista inteira com ela apagaria essas ações em silêncio — a estrela
-      // se desmarcaria sozinha, sem erro, sem explicação. A forma funcional
-      // de `setBanco` lê o estado no momento em que aplica, não o que foi
-      // capturado quando o ranking começou, então uma vaga arquivada nesse
-      // meio-tempo (que já saiu de `atual` via filter) continua fora —
-      // iterar sobre `ranqueadas` a traria de volta por engano.
-      setBanco((atual) =>
-        atual.map((v) => {
-          const r = ranqueadas.find((x) => x.id === v.id)
-          return r ? { ...v, rank: r.rank, rankMotivo: r.rankMotivo } : v
-        }),
-      )
+      setBanco((atual) => mesclarRank(atual, ranqueadas))
     } catch (err) {
       setErroRanking(mensagemDoErro(err))
     } finally {
@@ -2443,25 +2458,96 @@ export default function App() {
     }
   }
 
+  /**
+   * Mesma lógica de `ranquearBanco`, para a lista própria da Vaga
+   * Inteligente (`vagasIa`) — repor `banco` aqui vazaria os resultados de
+   * uma aba para a outra, então o estado de erro e de "carregando" também
+   * são próprios (`erroIa`, `ranqueandoIa`).
+   */
+  async function ranquearIa(vagas) {
+    const perfil = perfilEfetivo(cv)
+    if (!perfil || vagas.length === 0) return
+
+    setRanqueandoIa(true)
+    try {
+      const ranqueadas = await ranquear(perfil, instrucao, vagas)
+      setVagasIa((atual) => mesclarRank(atual, ranqueadas))
+    } catch (err) {
+      setErroIa(mensagemDoErro(err))
+    } finally {
+      setRanqueandoIa(false)
+    }
+  }
+
   const consultaPendente =
     cargoRascunho !== cargo || cidadeRascunho !== cidade
 
   /**
-   * Busca inteligente. Hoje só encena: espera um instante e mostra o estado
-   * que explica o que falta. O que já é real é o registro na cota — o passo da
-   * JSearch gastaria uma das 200, e essa conta não pode começar depois.
+   * Busca inteligente de verdade: o cargo não é digitado, sai do perfil que
+   * a Claude já deduziu no upload (`perfilEfetivo(cv).cargo_deduzido`) — é a
+   * diferença para a aba Vagas, onde o aluno escreve o cargo. Mesma ordem de
+   * `buscar()`: cache primeiro (não gasta das 200 requisições/mês), JSearch
+   * só se faltar, e o ranking entra depois, com a lista já na tela.
    *
-   * O termo vai como "Vaga Inteligente" porque o cargo verdadeiro só existirá
-   * quando a Claude API ler o currículo; é ele que ocupa esse lugar depois.
+   * `cargo_deduzido` pode vir `null` do schema (a Claude não teve o que
+   * deduzir); `?? ''` evita que a falta dele quebre o `.trim()` de
+   * `registrarUso`/`montarConsulta` — a busca cai para "só cidade", como já
+   * acontece na aba Vagas quando falta um dos dois campos.
    */
-  function buscarInteligente() {
-    if (buscandoIa) return
-    setBuscandoIa(true)
-    setCota(registrarUso('Vaga Inteligente', cidadeIa, 'rede'))
-    window.setTimeout(() => {
-      setBuscandoIa(false)
+  async function buscarInteligente() {
+    if (buscandoIa || ranqueandoIa) return
+
+    const perfil = perfilEfetivo(cv)
+    if (!perfil) {
+      setErroIa('Envie um currículo antes de buscar — é dele que sai o cargo.')
+      return
+    }
+
+    const termo = perfil.cargo_deduzido ?? ''
+    const cidadeAlvo = cidadeIa.trim()
+    setErroIa(null)
+    setBuscaIaFeita(false)
+
+    const guardado = consultarCache(termo, cidadeAlvo)
+    if (guardado) {
+      setVagasIa(guardado.vagas)
+      setCota(registrarUso(termo, cidadeAlvo, 'cache'))
       setBuscaIaFeita(true)
-    }, 900)
+      await ranquearIa(guardado.vagas)
+      return
+    }
+
+    setBuscandoIa(true)
+    let vagasEncontradas = null
+    try {
+      const resposta = await buscarVagas(montarConsulta(termo, cidadeAlvo))
+      const vagas = mapearVagas(vagasDaResposta(resposta))
+      setVagasIa(vagas)
+      setCota(registrarUso(termo, cidadeAlvo, 'rede', vagas))
+      setBuscaIaFeita(true)
+      vagasEncontradas = vagas
+    } catch (err) {
+      const erro =
+        err instanceof ErroJSearch
+          ? err
+          : new ErroJSearch(`Erro inesperado: ${err.message}`)
+      setErroIa(erro.message)
+      setVagasIa([])
+      setBuscaIaFeita(true)
+      // Mesmo raciocínio de `buscar()`: um erro que chegou à API consumiu
+      // uma das 200 mesmo sem devolver vaga.
+      if (erro.tocouApi) {
+        setCota(registrarUso(termo, cidadeAlvo, 'rede'))
+      }
+    } finally {
+      setBuscandoIa(false)
+    }
+
+    // A lista já está na tela neste ponto — buscandoIa virou false acima. O
+    // ranking, se rodar, só repõe vagasIa quando terminar.
+    if (vagasEncontradas) {
+      await ranquearIa(vagasEncontradas)
+    }
   }
 
   function irParaAba(nova) {
@@ -2724,8 +2810,10 @@ export default function App() {
               setBuscaIaFeita(false)
             }}
             buscando={buscandoIa}
+            ranqueando={ranqueandoIa}
             buscaFeita={buscaIaFeita}
-            bancoVazio={banco.length === 0}
+            vagas={vagasIa}
+            erro={erroIa}
             onBuscar={buscarInteligente}
             onIrParaCurriculo={() => irParaAba('ia')}
           />

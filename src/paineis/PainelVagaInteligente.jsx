@@ -1,20 +1,18 @@
-import { Carregando } from './comuns'
+import { AvisoErro, Carregando } from './comuns'
 import CampoCidade from './CampoCidade'
 
 /**
  * Aba Vaga Inteligente: a busca que o aluno não precisa saber formular.
  *
- * O mecanismo previsto, quando as três integrações existirem:
+ * O mecanismo, ligado:
  *
- *   1. a Claude API lê o currículo e deduz o cargo — o aluno informa só a cidade
- *   2. a JSearch busca por (cargo deduzido + cidade)
- *   3. a Claude API compara cada vaga com o currículo e dá uma nota
- *   4. a lista volta ordenada por compatibilidade
- *
- * Nada disso está ligado. Este painel é a casca: os estados, a ordem das
- * etapas e o lugar de cada resultado. O que ele faz de verdade hoje é registrar
- * a busca na cota — porque o passo 2 gasta uma das 200 requisições do mês, e
- * essa conta precisa existir desde já.
+ *   1. o cargo vem do perfil já extraído no upload (`cargo_deduzido`) — sem
+ *      chamada nova à Claude aqui; o aluno informa só a cidade
+ *   2. a JSearch busca por (cargo deduzido + cidade), com cache-first: uma
+ *      consulta repetida não gasta das 200 requisições do mês
+ *   3. a Claude compara as vagas com o currículo e dá uma nota a cada uma
+ *   4. a lista aparece assim que a JSearch volta; as notas chegam depois —
+ *      `buscando` cobre o passo 2, `ranqueando` cobre o passo 3
  *
  * O currículo é o mesmo da aba Avaliação IA: um só no app inteiro. Sem CV
  * enviado, esta aba não tem o que fazer e manda o aluno para lá.
@@ -24,8 +22,10 @@ export default function PainelVagaInteligente({
   cidade,
   onCidade,
   buscando,
+  ranqueando,
   buscaFeita,
-  bancoVazio,
+  vagas,
+  erro,
   onBuscar,
   onIrParaCurriculo,
 }) {
@@ -228,47 +228,51 @@ export default function PainelVagaInteligente({
             lineHeight: 1.6,
           }}
         >
-          Você não escolhe o cargo: a IA deduz do seu currículo. Cada busca custa{' '}
-          <strong style={{ color: '#B7C0D0' }}>1 requisição JSearch</strong> mais
-          as chamadas à Claude — uma para ler o currículo e uma por vaga
-          comparada. É a busca mais cara do app; a aba Controle registra a parte
-          da JSearch.
+          Você não escolhe o cargo: a IA já deduziu do seu currículo quando ele
+          foi enviado. Cada busca custa{' '}
+          <strong style={{ color: '#B7C0D0' }}>1 requisição JSearch</strong>{' '}
+          (ou zero, se a mesma consulta já estiver em cache) mais 1 chamada à
+          Claude para comparar as vagas com o currículo. A aba Controle
+          registra a parte da JSearch.
         </div>
       </div>
 
       <div style={{ ...cartao, minHeight: 260 }}>
+        {erro && <AvisoErro texto={erro} />}
         {buscando ? (
-          <Carregando />
+          <Carregando texto="Buscando vagas para o cargo do seu currículo..." />
         ) : buscaFeita ? (
-          <ResultadoInteligente cidade={cidade} bancoVazio={bancoVazio} />
+          <ResultadoInteligente vagas={vagas} ranqueando={ranqueando} />
         ) : (
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 12,
-              minHeight: 220,
-              textAlign: 'center',
-            }}
-          >
-            <div style={{ fontSize: 15, fontWeight: 600 }}>
-              Informe a cidade e busque
-            </div>
+          !erro && (
             <div
               style={{
-                fontSize: 13,
-                color: '#8A94A6',
-                maxWidth: 420,
-                lineHeight: 1.6,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 12,
+                minHeight: 220,
+                textAlign: 'center',
               }}
             >
-              A IA vai ler seu currículo, deduzir o cargo, procurar as vagas
-              dessa cidade e comparar uma a uma com o seu perfil. O resultado
-              volta ordenado por compatibilidade.
+              <div style={{ fontSize: 15, fontWeight: 600 }}>
+                Informe a cidade e busque
+              </div>
+              <div
+                style={{
+                  fontSize: 13,
+                  color: '#8A94A6',
+                  maxWidth: 420,
+                  lineHeight: 1.6,
+                }}
+              >
+                A JSearch procura as vagas do cargo já deduzido do seu
+                currículo nessa cidade; a Claude compara cada uma com o seu
+                perfil. O resultado volta ordenado por compatibilidade.
+              </div>
             </div>
-          </div>
+          )
         )}
       </div>
     </div>
@@ -278,58 +282,108 @@ export default function PainelVagaInteligente({
 /**
  * O resultado da busca inteligente. Enquanto nada está conectado, o honesto é
  * nomear as três integrações que faltam — senão a tela parece só quebrada.
+ *//**
+ * O resultado da busca inteligente.
+ *
+ * Antes daqui existir de verdade, este componente mostrava um texto listando
+ * "três ligações que ainda não existem". As três existem agora — cargo deduzido
+ * na extração, JSearch, e ranking — então aquele texto virou mentira e saiu.
+ *
+ * Apresentação própria, mais simples que a tabela da aba Vagas: aquela depende
+ * de ordenação, paginação, menu por linha e favoritos, estado que esta aba não
+ * tem. Reaproveitá-la exigiria arrastar tudo isso junto para cá.
  */
-function ResultadoInteligente({ cidade, bancoVazio }) {
-  const pendencia = (texto) => (
-    <li style={{ marginBottom: 6 }}>
-      <span style={{ color: '#D9A441' }}>◦</span> {texto}
-    </li>
-  )
-
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        gap: 14,
-        padding: '30px 10px',
-        textAlign: 'center',
-      }}
-    >
-      <div style={{ fontSize: 15, fontWeight: 600 }}>
-        Nada a ranquear ainda
-      </div>
+function ResultadoInteligente({ vagas, ranqueando }) {
+  if (!vagas.length) {
+    // Busca rodou e não achou nada. Não é erro, e não deve parecer erro: o
+    // aluno precisa saber que a consulta funcionou e o mercado é que está vazio.
+    return (
       <div
         style={{
-          fontSize: 13,
-          color: '#8A94A6',
-          maxWidth: 460,
-          lineHeight: 1.6,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          gap: 10,
+          padding: '30px 10px',
+          textAlign: 'center',
         }}
       >
-        A busca para {cidade || 'a cidade escolhida'} foi registrada na cota, mas
-        o resultado depende de três ligações que ainda não existem:
+        <div style={{ fontSize: 15, fontWeight: 600 }}>
+          Nenhuma vaga encontrada
+        </div>
+        <div
+          style={{
+            fontSize: 13,
+            color: '#8A94A6',
+            maxWidth: 440,
+            lineHeight: 1.6,
+          }}
+        >
+          A busca rodou para o cargo do seu currículo nesta cidade e não trouxe
+          resultado. Tente outra cidade, ou ajuste o cargo na aba Avaliação IA
+          se ele não descreve bem o que você procura.
+        </div>
       </div>
-      <ul
-        style={{
-          listStyle: 'none',
-          padding: 0,
-          margin: 0,
-          fontSize: 13,
-          color: '#8A94A6',
-          textAlign: 'left',
-          lineHeight: 1.6,
-        }}
-      >
-        {pendencia('Claude API para deduzir o cargo a partir do currículo')}
-        {pendencia(
-          bancoVazio
-            ? 'JSearch para trazer as vagas — o banco local está vazio'
-            : 'JSearch para trazer as vagas',
-        )}
-        {pendencia('Claude API para pontuar cada vaga contra o currículo')}
-      </ul>
+    )
+  }
+
+  // Ordena pela nota, maior primeiro. Vaga sem nota vai para o fim em vez de
+  // sumir: ela é um resultado legítimo da busca, só não foi pontuada.
+  const ordenadas = [...vagas].sort((a, b) => (b.rank ?? -1) - (a.rank ?? -1))
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {ranqueando && (
+        <div style={{ fontSize: 12.5, color: '#8A94A6', paddingBottom: 2 }}>
+          As vagas já estão aqui; as notas estão sendo calculadas...
+        </div>
+      )}
+
+      {ordenadas.map((vaga) => (
+        <div
+          key={vaga.id}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 14,
+            border: '1px solid rgba(255,255,255,0.06)',
+            background: '#0E1626',
+            borderRadius: 10,
+            padding: '12px 14px',
+          }}
+        >
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 14, fontWeight: 600 }}>
+              {vaga.cargo ?? 'Sem título'}
+            </div>
+            <div style={{ fontSize: 12.5, color: '#8A94A6', marginTop: 3 }}>
+              {[vaga.empresa, vaga.cidade, vaga.modalidade]
+                .filter(Boolean)
+                .join(' · ')}
+            </div>
+            {vaga.rankMotivo && (
+              <div style={{ fontSize: 12, color: '#7C8699', marginTop: 5 }}>
+                {vaga.rankMotivo}
+              </div>
+            )}
+          </div>
+
+          <div style={{ textAlign: 'right', minWidth: 76 }}>
+            {/* "Rank IA", nunca "%": a nota é relativa ao conjunto desta
+                busca, e chamá-la de porcentagem afirmaria o que ela não é. */}
+            <div style={{ fontSize: 11, color: '#7C8699' }}>Rank IA</div>
+            <div
+              style={{
+                fontSize: 18,
+                fontWeight: 700,
+                color: vaga.rank === null ? '#5A6478' : '#3B82F6',
+              }}
+            >
+              {vaga.rank === null ? '—' : vaga.rank}
+            </div>
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
