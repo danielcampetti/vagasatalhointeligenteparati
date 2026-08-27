@@ -8,6 +8,7 @@ vi.mock('./claude', async (importOriginal) => {
   return { ...real, chamarEstruturado: vi.fn() }
 })
 import { chamarEstruturado, TIPOS } from './claude'
+import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import {
   PerfilSchema,
   conferirPerfil,
@@ -101,6 +102,20 @@ describe('conteudoDeTexto', () => {
   })
 })
 
+// A regra "deixe null fora do caminho de PDF" saiu do texto do prompt (teste
+// acima) e foi morar na descrição do campo no schema, que viaja em
+// output_config.format.schema — ver PerfilSchema em perfil.js. Sem este
+// teste, um `.describe()` apagado numa edição futura não deixaria nada
+// vermelho: o modelo voltaria a preencher texto_extraido também fora do PDF,
+// gastando ~3.000 tokens de saída à toa em todo upload de .docx ou texto
+// colado, com a suíte inteira verde.
+describe('PerfilSchema — descrição de texto_extraido no schema', () => {
+  test('a descrição do campo manda deixar null fora do caminho de PDF', () => {
+    const { schema } = zodOutputFormat(PerfilSchema)
+    expect(schema.properties.texto_extraido.description).toMatch(/null/i)
+  })
+})
+
 describe('conferirPerfil', () => {
   test('passa num perfil com tecnologias', () => {
     expect(() => conferirPerfil(PERFIL_BOM)).not.toThrow()
@@ -167,5 +182,13 @@ describe('extrairPerfil', () => {
     await expect(extrairPerfil({ texto: 'x' })).rejects.toThrow(
       /não consegui ler/i,
     )
+  })
+
+  test('sem base64 e sem texto: rejeita antes de chamar a API — não manda "Currículo: undefined" pago', async () => {
+    chamarEstruturado.mockClear()
+
+    await expect(extrairPerfil({})).rejects.toThrow()
+
+    expect(chamarEstruturado).not.toHaveBeenCalled()
   })
 })

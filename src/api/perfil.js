@@ -100,9 +100,10 @@ export function conteudoDeTexto(texto) {
  */
 export function conferirPerfil(perfil) {
   if (!perfil) {
-    throw new ErroClaude('A extração não devolveu perfil nenhum.', {
-      tipo: 'vazio',
-    })
+    throw new ErroClaude(
+      'A extração não devolveu perfil nenhum. Tente de novo ou cole o texto no campo abaixo.',
+      { tipo: 'vazio' },
+    )
   }
   if (!Array.isArray(perfil.tecnologias) || perfil.tecnologias.length === 0) {
     throw new ErroClaude(
@@ -118,6 +119,17 @@ export function conferirPerfil(perfil) {
  * embutida na mesma resposta.
  */
 export async function extrairPerfil({ base64, texto }) {
+  // Sem isto, `{}` cairia direto em conteudoDeTexto(undefined) e mandaria
+  // "Currículo:\n\nundefined" para uma chamada paga — o módulo inteiro é
+  // consciente de custo e teto, essa é a única porta que não confere nada
+  // antes de gastar. Falha antes da rede, então nem entra na contabilização.
+  if (!base64 && !texto) {
+    throw new ErroClaude(
+      'Nenhum currículo foi enviado. Anexe um PDF ou cole o texto no campo abaixo.',
+      { tipo: 'vazio' },
+    )
+  }
+
   // `chamarEstruturado` cuida de teto, contabilização e checagem de recusa,
   // na ordem certa — ver o cabeçalho de claude.js para o porquê da ordem ser
   // fixa. Este módulo nunca chama o SDK direto.
