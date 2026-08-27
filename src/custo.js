@@ -29,12 +29,33 @@ export const LIMITE_PADRAO_USD = 5
 
 const CHAVE = 'vagas:custo'
 
-const VAZIO = { desde: null, chamadas: [], teto: LIMITE_PADRAO_USD }
+const VAZIO = { desde: null, chamadas: [], teto: LIMITE_PADRAO_USD, acumulado: {} }
+
+/**
+ * `dados.acumulado` inválido ou ausente (localStorage de antes desta
+ * correção, ou valor adulterado) vira `{}` — não recomputado a partir de
+ * `chamadas`, porque `chamadas` já é só o anel das 200 mais recentes e
+ * reconstituir dali reintroduziria o mesmo viés que este campo existe para
+ * evitar. Um aluno que atualiza no meio do ciclo perde o acumulado até ali;
+ * mais seguro que inventar um número.
+ */
+function acumuladoValido(bruto) {
+  if (!bruto || typeof bruto !== 'object') return {}
+  const limpo = {}
+  for (const [modelo, tokens] of Object.entries(bruto)) {
+    const entrada = Number(tokens?.entrada)
+    const saida = Number(tokens?.saida)
+    if (Number.isFinite(entrada) && Number.isFinite(saida)) {
+      limpo[modelo] = { entrada, saida }
+    }
+  }
+  return limpo
+}
 
 export function lerCusto() {
   try {
     const cru = localStorage.getItem(CHAVE)
-    if (!cru) return { ...VAZIO, chamadas: [] }
+    if (!cru) return { ...VAZIO, chamadas: [], acumulado: {} }
     const dados = JSON.parse(cru)
     return {
       desde: typeof dados.desde === 'string' ? dados.desde : null,
@@ -43,9 +64,10 @@ export function lerCusto() {
         typeof dados.teto === 'number' && dados.teto > 0
           ? dados.teto
           : LIMITE_PADRAO_USD,
+      acumulado: acumuladoValido(dados.acumulado),
     }
   } catch {
-    return { ...VAZIO, chamadas: [] }
+    return { ...VAZIO, chamadas: [], acumulado: {} }
   }
 }
 
@@ -62,23 +84,33 @@ function gravar(custo) {
 /**
  * `uso` é o `response.usage` do SDK. Modelo desconhecido é guardado do mesmo
  * jeito — o registro é histórico, e o preço a gente resolve na leitura.
+ *
+ * `chamadas` grava só as 200 mais recentes (`.slice(0, 200)`, logo abaixo) —
+ * é o histórico que a aba Controle lista, não precisa de mais. `acumulado`,
+ * ao lado, soma para sempre, sem `slice`: é dele que `excedeuTeto` lê. Ver o
+ * comentário do próprio `acumulado`, mais abaixo, para o porquê dos dois
+ * existirem separados.
  */
 export function registrarChamada(tipo, uso, modelo, agora = new Date()) {
   const custo = lerCusto()
   const quando = agora.toISOString()
+  const entrada = uso?.input_tokens ?? 0
+  const saida = uso?.output_tokens ?? 0
+  const acumuladoDoModelo = custo.acumulado[modelo] ?? { entrada: 0, saida: 0 }
   return gravar({
     ...custo,
     desde: custo.desde ?? quando,
     chamadas: [
-      {
-        quando,
-        tipo,
-        entrada: uso?.input_tokens ?? 0,
-        saida: uso?.output_tokens ?? 0,
-        modelo,
-      },
+      { quando, tipo, entrada, saida, modelo },
       ...custo.chamadas,
     ].slice(0, 200),
+    acumulado: {
+      ...custo.acumulado,
+      [modelo]: {
+        entrada: acumuladoDoModelo.entrada + entrada,
+        saida: acumuladoDoModelo.saida + saida,
+      },
+    },
   })
 }
 
@@ -94,13 +126,41 @@ export function dolares(chamadas) {
   }, 0)
 }
 
+/**
+ * `acumulado` é `{ [modelo]: { entrada, saida } }` — token, não dólar, pela
+ * mesma razão do arquivo inteiro (comentário do topo): preço muda, token é
+ * fato. Reaproveita `dolares()` tratando cada modelo acumulado como se fosse
+ * uma "chamada" só, com o total de tokens daquele modelo.
+ */
+export function dolaresAcumulados(acumulado) {
+  return dolares(
+    Object.entries(acumulado ?? {}).map(([modelo, tokens]) => ({
+      modelo,
+      entrada: tokens.entrada,
+      saida: tokens.saida,
+    })),
+  )
+}
+
+/**
+ * Corrigido depois de revisão: isto lia `dolares(custo.chamadas)` — o anel
+ * das 200 mais recentes. Com `claude-opus-5` (US$5/25) 200 chamadas somavam
+ * mais que um teto de poucos dólares antes do anel girar, então o defeito
+ * não aparecia. Com `claude-sonnet-5` (US$2/10, a troca que fizemos para
+ * baratear) 200 chamadas não somam mais tanto assim, e o anel passou a girar
+ * de verdade: a partir da 201ª chamada, uma velha sai do anel a cada nova
+ * que entra, e `dolares(custo.chamadas)` pode CAIR em vez de subir — o teto
+ * deixando de disparar bem quando mais se gastou, não menos. `acumulado`
+ * nunca gira, então é a base certa para o teto; `chamadas` continua servindo
+ * só à lista da tela.
+ */
 export function excedeuTeto(custo) {
-  return dolares(custo.chamadas) >= custo.teto
+  return dolaresAcumulados(custo.acumulado) >= custo.teto
 }
 
 export function zerarCusto(agora = new Date()) {
   const custo = lerCusto()
-  return gravar({ ...custo, desde: agora.toISOString(), chamadas: [] })
+  return gravar({ ...custo, desde: agora.toISOString(), chamadas: [], acumulado: {} })
 }
 
 export function definirTeto(usd) {
