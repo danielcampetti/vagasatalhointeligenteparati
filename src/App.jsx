@@ -1810,7 +1810,7 @@ function ModalNovaVaga({ form, onCampo, onFechar, onSalvar }) {
  * chega primeiro ao que já sabemos da vaga, e sai para o anúncio original se
  * quiser mesmo se candidatar.
  */
-function PaginaVaga({ vaga, onVoltar, cv, instrucao, onCusto }) {
+function PaginaVaga({ vaga, onVoltar, cv, instrucao, onCusto, ranqueando }) {
   const d = derivar(vaga)
 
   // Não persiste: reabrir a vaga (ou trocar de aba e voltar) refaz a
@@ -1932,12 +1932,19 @@ function PaginaVaga({ vaga, onVoltar, cv, instrucao, onCusto }) {
             </span>
           ) : (
             <span style={{ fontSize: 13, color: '#6E7789' }}>
-              {/* `vaga.rank` null cobre dois casos que o dado não distingue:
-                  o ranking nunca rodou, ou rodou e esta vaga não pontuou
-                  (ver o caminho degradado em ranking.js). Na prática, quem
-                  chega nesta página já passou pelo ranking — dizer "ainda
-                  não roda" era falso justo no caso comum. */}
-              Rank IA — a comparação rodou e esta vaga não recebeu nota
+              {/* `vaga.rank` null não distingue por que não há nota, então o
+                  texto sai do estado da tela, não do dado. Já erramos aqui
+                  duas vezes: "ainda não roda" mentia depois que o ranking
+                  passou a rodar, e "a comparação rodou" mentia sem currículo
+                  (o `ranquearBanco` desiste antes de chamar) e durante o
+                  próprio ranking, que deixa a tabela clicável enquanto
+                  trabalha. Se acrescentar um quarto caso, condicione também
+                  — afirmar categoricamente aqui é o erro que se repete. */}
+              {!cv?.perfil
+                ? 'Rank IA — envie um currículo na aba Avaliação IA para ranquear'
+                : ranqueando
+                  ? 'Rank IA — comparando com o seu currículo...'
+                  : 'Rank IA — a comparação rodou e esta vaga não recebeu nota'}
             </span>
           )}
         </div>
@@ -2840,6 +2847,7 @@ export default function App() {
             cv={cv}
             instrucao={instrucao}
             onCusto={() => setCusto(lerCusto())}
+            ranqueando={ranqueando}
           />
         )}
 
