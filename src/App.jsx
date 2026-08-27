@@ -12,6 +12,7 @@ import {
 } from './cota'
 import { mensagemDoErro } from './api/claude'
 import { ErroJSearch, buscarVagas, montarConsulta, vagasDaResposta } from './api/jsearch'
+import { justificar } from './api/justificativa'
 import { mapearVagas } from './api/mapear'
 import { ranquear } from './api/ranking'
 import { definirInstrucao, lerCurriculo, perfilEfetivo } from './curriculo'
@@ -1798,8 +1799,28 @@ function ModalNovaVaga({ form, onCampo, onFechar, onSalvar }) {
  * chega primeiro ao que já sabemos da vaga, e sai para o anúncio original se
  * quiser mesmo se candidatar.
  */
-function PaginaVaga({ vaga, onVoltar }) {
+function PaginaVaga({ vaga, onVoltar, cv, instrucao }) {
   const d = derivar(vaga)
+
+  // Não persiste: reabrir a vaga (ou trocar de aba e voltar) refaz a
+  // chamada. Guardar exigiria mais um cache para invalidar toda vez que o
+  // perfil mudasse, e o preço (~US$ 0,01) não justifica.
+  const [justificativa, setJustificativa] = useState(null)
+  const [justificando, setJustificando] = useState(false)
+  const [erroJustificativa, setErroJustificativa] = useState(null)
+
+  async function pedirJustificativa() {
+    setJustificando(true)
+    setErroJustificativa(null)
+    try {
+      const texto = await justificar(perfilEfetivo(cv), cv?.texto, instrucao, vaga)
+      setJustificativa(texto)
+    } catch (err) {
+      setErroJustificativa(mensagemDoErro(err))
+    } finally {
+      setJustificando(false)
+    }
+  }
 
   const cartao = {
     border: '1px solid rgba(255,255,255,0.07)',
@@ -1920,6 +1941,65 @@ function PaginaVaga({ vaga, onVoltar }) {
           ))}
         </div>
       </div>
+
+      {/* Só existe nota para justificar quando o ranking já rodou — uma vaga
+          sem `rank` não tem o que explicar. */}
+      {vaga.rank !== null && (
+        <div style={cartao}>
+          <div style={legenda}>Por que esta nota?</div>
+
+          {!justificativa && !justificando && (
+            <button
+              onClick={pedirJustificativa}
+              disabled={justificando}
+              className="bg-[#161F33] hover:bg-[#1B2740]"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                padding: '9px 16px',
+                borderRadius: 9,
+                border: '1px solid rgba(255,255,255,0.1)',
+                color: '#D3DAE6',
+                fontSize: 13.5,
+                fontWeight: 500,
+                cursor: 'pointer',
+              }}
+            >
+              <svg
+                width="15"
+                height="15"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.9"
+              >
+                <circle cx="12" cy="12" r="9" />
+                <path d="M9.5 9.2a2.5 2.5 0 0 1 4.9.8c0 1.7-2.4 1.9-2.4 3.5M12 16.6v.1" />
+              </svg>
+              Por que esta nota?
+            </button>
+          )}
+
+          {justificando && <Carregando texto="Gerando a justificativa..." />}
+
+          {erroJustificativa && <AvisoErro texto={erroJustificativa} />}
+
+          {justificativa && (
+            <p
+              style={{
+                margin: 0,
+                fontSize: 14,
+                color: '#C8D1E0',
+                lineHeight: 1.75,
+                whiteSpace: 'pre-wrap',
+              }}
+            >
+              {justificativa}
+            </p>
+          )}
+        </div>
+      )}
 
       <div style={cartao}>
         <div style={legenda}>Descrição da vaga</div>
@@ -2643,7 +2723,12 @@ export default function App() {
         {/* A página de detalhe ocupa o lugar da tabela e do bloco de consulta:
             é uma tela, não um painel dentro da listagem. */}
         {ehTabela && detalhe && (
-          <PaginaVaga vaga={detalhe} onVoltar={fecharVaga} />
+          <PaginaVaga
+            vaga={detalhe}
+            onVoltar={fecharVaga}
+            cv={cv}
+            instrucao={instrucao}
+          />
         )}
 
         {ehTabela && !detalhe && (
