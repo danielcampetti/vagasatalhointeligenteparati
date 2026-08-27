@@ -42,6 +42,11 @@ Levantado no código, não suposto:
 | `ResultadoInteligente` | 2859–2920 | junto, mesmo arquivo |
 | `AvisoErro` | 2790–2825 | `src/paineis/comuns.jsx` |
 | `Carregando` | 2826–2858 | `src/paineis/comuns.jsx` |
+| `CampoCidade` | 797–1019 | `src/paineis/CampoCidade.jsx` |
+
+`CampoCidade` leva junto dois consts de módulo que só ele usa —
+`CIDADES_INDEXADAS` e `TETO_SUGESTOES` — e o helper `semAcento` (linha 123),
+que também não tinha nenhum outro chamador no arquivo.
 
 ### A armadilha que o levantamento revelou
 
@@ -58,6 +63,18 @@ importa ninguém. `ResultadoInteligente` não tem esse problema — só o painel
 usa — e vai junto com ele.
 
 `PainelIA` não usa nada de fora: recorte limpo.
+
+**Correção pós-execução (Tarefa 1):** este mapa saiu de grep dirigido aos
+componentes já suspeitos — não cruzou o conteúdo de cada bloco contra *todos*
+os símbolos do arquivo. Por isso `CampoCidade` escapou: é o mesmo padrão do
+`Carregando`, um componente usado tanto por quem fica (`ConsultaDestaque`,
+linha 1097, permanece no `App`) quanto por quem sai (`PainelVagaInteligente`,
+linha 2693). Só apareceu quando a Tarefa 1 rodou a verificação cruzada completa
+antes de cortar. Ele não foi para `comuns.jsx` — é um combobox com indexação
+própria sobre 5.571 municípios, não um aviso pequeno — e ganhou arquivo
+próprio, `src/paineis/CampoCidade.jsx`. Quem levantar um mapa parecido para uma
+tarefa futura deve cruzar contra a lista completa de símbolos do arquivo, não
+só contra os componentes já sob suspeita.
 
 ---
 
