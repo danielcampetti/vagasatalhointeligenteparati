@@ -1,3 +1,4 @@
+import { faseDaBusca } from '../fase'
 import { AvisoErro, Carregando } from './comuns'
 import CampoCidade from './CampoCidade'
 
@@ -11,8 +12,13 @@ import CampoCidade from './CampoCidade'
  *   2. a JSearch busca por (cargo deduzido + cidade), com cache-first: uma
  *      consulta repetida não gasta das 200 requisições do mês
  *   3. a Claude compara as vagas com o currículo e dá uma nota a cada uma
- *   4. a lista aparece assim que a JSearch volta; as notas chegam depois —
- *      `buscando` cobre o passo 2, `ranqueando` cobre o passo 3
+ *   4. a lista aparece só quando os dois terminam, com a nota já no lugar —
+ *      `buscando` cobre o passo 2, `ranqueando` cobre o passo 3, e a espera
+ *      nomeia qual dos dois está no ar (ver `fase.js`)
+ *
+ * O passo 4 já foi o contrário: a lista aparecia no fim do passo 2 e as notas
+ * caíam em cima dela segundos depois. Parecia defeito — a tabela pronta com a
+ * coluna de nota vazia, sem nada explicando que ainda vinha coisa.
  *
  * O currículo é o mesmo da aba Avaliação IA: um só no app inteiro. Sem CV
  * enviado, esta aba não tem o que fazer e manda o aluno para lá.
@@ -29,6 +35,10 @@ export default function PainelVagaInteligente({
   onBuscar,
   onIrParaCurriculo,
 }) {
+  // A mesma espera da aba Vagas, pelo mesmo motivo — ver `fase.js`. Aqui não
+  // precisa de escopo por aba: este painel é a aba inteira.
+  const fase = faseDaBusca({ buscando, ranqueando, quantas: vagas.length })
+
   const cartao = {
     border: '1px solid rgba(255,255,255,0.07)',
     background: '#0B1220',
@@ -186,11 +196,12 @@ export default function PainelVagaInteligente({
 
           <button
             onClick={onBuscar}
-            // A fase de ranking (`ranqueando`) dura vários segundos com a
-            // lista já na tela; sem isto o botão fica clicável e inerte
-            // nesse intervalo — `onBuscar` recusaria de qualquer forma
-            // (`buscarInteligente` guarda `if (buscandoIa || ranqueandoIa)
-            // return`), mas sem avisar por que o clique não fez nada.
+            // A fase de ranking (`ranqueando`) dura vários segundos; sem isto
+            // o botão fica clicável e inerte nesse intervalo — `onBuscar`
+            // recusaria de qualquer forma (`buscarInteligente` guarda
+            // `if (buscandoIa || ranqueandoIa) return`), mas sem avisar por
+            // que o clique não fez nada. A lista não está mais na tela
+            // durante o ranking, mas este botão está.
             disabled={buscando || ranqueando}
             className={
               buscando
@@ -244,10 +255,10 @@ export default function PainelVagaInteligente({
 
       <div style={{ ...cartao, minHeight: 260 }}>
         {erro && <AvisoErro texto={erro} />}
-        {buscando ? (
-          <Carregando texto="Buscando vagas para o cargo do seu currículo..." />
+        {fase ? (
+          <Carregando texto={fase.texto} detalhe={fase.detalhe} />
         ) : buscaFeita ? (
-          <ResultadoInteligente vagas={vagas} ranqueando={ranqueando} />
+          <ResultadoInteligente vagas={vagas} />
         ) : (
           !erro && (
             <div
@@ -295,7 +306,7 @@ export default function PainelVagaInteligente({
  * de ordenação, paginação, menu por linha e favoritos, estado que esta aba não
  * tem. Reaproveitá-la exigiria arrastar tudo isso junto para cá.
  */
-function ResultadoInteligente({ vagas, ranqueando }) {
+function ResultadoInteligente({ vagas }) {
   if (!vagas.length) {
     // Busca rodou e não achou nada. Não é erro, e não deve parecer erro: o
     // aluno precisa saber que a consulta funcionou e o mercado é que está vazio.
@@ -333,14 +344,12 @@ function ResultadoInteligente({ vagas, ranqueando }) {
   // sumir: ela é um resultado legítimo da busca, só não foi pontuada.
   const ordenadas = [...vagas].sort((a, b) => (b.rank ?? -1) - (a.rank ?? -1))
 
+  // O aviso "as vagas já estão aqui; as notas estão sendo calculadas" morava
+  // aqui e foi removido: a lista só renderiza depois do ranking, então ele
+  // nunca mais poderia aparecer. Texto de tela que não pode acontecer é a
+  // mesma armadilha do rótulo do Rank IA — vira mentira na primeira leitura.
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-      {ranqueando && (
-        <div style={{ fontSize: 12.5, color: '#8A94A6', paddingBottom: 2 }}>
-          As vagas já estão aqui; as notas estão sendo calculadas...
-        </div>
-      )}
-
       {ordenadas.map((vaga) => (
         <div
           key={vaga.id}

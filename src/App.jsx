@@ -17,6 +17,7 @@ import { mapearVagas } from './api/mapear'
 import { ranquear } from './api/ranking'
 import { definirInstrucao, lerCurriculo, perfilEfetivo } from './curriculo'
 import { dolares, lerCusto, zerarCusto } from './custo'
+import { faseDaBusca } from './fase'
 import CampoCidade from './paineis/CampoCidade'
 import { AvisoErro, Carregando } from './paineis/comuns'
 import PainelIA from './paineis/PainelIA'
@@ -857,11 +858,12 @@ function ConsultaDestaque({
 
         <button
           onClick={onBuscar}
-          // `ranqueando` dura vários segundos com a tabela já na tela; sem
-          // ele no `disabled` o botão fica clicável e inerte nesse
-          // intervalo — `buscar()` já recusa (`if (buscando || ranqueando)
-          // return`), mas em silêncio, sem avisar por que o clique não fez
-          // nada.
+          // `ranqueando` dura vários segundos; sem ele no `disabled` o botão
+          // fica clicável e inerte nesse intervalo — `buscar()` já recusa
+          // (`if (buscando || ranqueando) return`), mas em silêncio, sem
+          // avisar por que o clique não fez nada. (A tabela não está mais na
+          // tela durante o ranking, mas o campo de busca continua — é dele
+          // que este botão faz parte.)
           disabled={buscando || ranqueando}
           className={buscando ? 'bg-[#2A3B5E]' : 'bg-[#2563EB] hover:bg-[#1D4FD8]'}
           style={{
@@ -1937,9 +1939,15 @@ function PaginaVaga({ vaga, onVoltar, cv, instrucao, onCusto, ranqueando }) {
                   duas vezes: "ainda não roda" mentia depois que o ranking
                   passou a rodar, e "a comparação rodou" mentia sem currículo
                   (o `ranquearBanco` desiste antes de chamar) e durante o
-                  próprio ranking, que deixa a tabela clicável enquanto
-                  trabalha. Se acrescentar um quarto caso, condicione também
-                  — afirmar categoricamente aqui é o erro que se repete. */}
+                  próprio ranking. Se acrescentar um quarto caso, condicione
+                  também — afirmar categoricamente aqui é o erro que se repete.
+
+                  O caso `ranqueando` hoje não tem como aparecer: só a tabela
+                  abre esta página, a tabela não renderiza durante o ranking, e
+                  o campo de busca fica escondido enquanto esta página está no
+                  ar. Fica de pé porque continua *verdadeiro* se renderizar —
+                  se um dia a lista voltar a aparecer antes das notas, ele
+                  volta a ser necessário e certo. Só não é mais um caso vivo. */}
               {!cv?.perfil
                 ? 'Rank IA — envie um currículo na aba Avaliação IA para ranquear'
                 : ranqueando
@@ -2394,10 +2402,21 @@ export default function App() {
   const [buscando, setBuscando] = useState(false)
   const [erroBusca, setErroBusca] = useState(null)
 
-  // O ranking roda depois que o banco já tem vagas — cache ou rede — e nunca
-  // bloqueia a lista aparecendo. `ranqueando` também tranca uma nova busca
-  // enquanto ele está no ar: sem isso, um `setBanco` do ranking anterior
-  // poderia chegar depois do banco de uma busca mais nova e sobrescrevê-la.
+  // O ranking roda depois que o banco já tem vagas — cache ou rede — e a
+  // tabela espera por ele: vaga e nota chegam juntas à tela (ver `faseVagas`
+  // e o cabeçalho de `fase.js`). Antes a lista aparecia primeiro e as notas
+  // caíam em cima dela segundos depois, o que lia como defeito.
+  //
+  // Repare que quem espera é a *tela*, não o dado: o `banco` continua sendo
+  // preenchido antes do ranking. É isso que mantém a degradação de graça —
+  // ranking que falha, que volta parcial, ou que nem roda por falta de
+  // currículo cai no `finally` abaixo, `ranqueando` desliga, e a tabela
+  // aparece com o que tiver. Uma lista que já custou uma das 200 requisições
+  // da JSearch nunca fica refém de uma chamada à Claude que deu errado.
+  //
+  // `ranqueando` também tranca uma nova busca enquanto ele está no ar: sem
+  // isso, um `setBanco` do ranking anterior poderia chegar depois do banco de
+  // uma busca mais nova e sobrescrevê-la.
   const [ranqueando, setRanqueando] = useState(false)
   const [erroRanking, setErroRanking] = useState(null)
 
@@ -2521,6 +2540,20 @@ export default function App() {
   // Na aba Vagas nada aparece até se buscar. A aba Banco de Dados mostra o
   // acervo sempre.
   const mostrarResultados = aba === 'banco' || consultaFeita
+
+  /**
+   * A espera que substitui a tabela, ou `null` quando é hora de mostrá-la.
+   *
+   * Escopada à aba Vagas de propósito. Este bloco de render é compartilhado
+   * com a aba Banco de Dados (`ehTabela` cobre as duas), e o acervo dela não
+   * tem nada a ver com uma busca em curso. Enquanto a espera durava os ~2s da
+   * JSearch isso era teórico; agora ela dura o ranking inteiro, e trocar de
+   * aba no meio deixaria o Banco de Dados em branco por ~25 segundos.
+   */
+  const faseVagas =
+    aba === 'vagas'
+      ? faseDaBusca({ buscando, ranqueando, quantas: banco.length })
+      : null
 
   /**
    * A busca de verdade. O cache vem antes da rede de propósito: são 200
@@ -2871,7 +2904,7 @@ export default function App() {
             {aba === 'vagas' && erroBusca && <AvisoErro texto={erroBusca} />}
             {aba === 'vagas' && erroRanking && <AvisoErro texto={erroRanking} />}
 
-            {buscando ? (
+            {faseVagas ? (
               <div
                 style={{
                   border: '1px solid rgba(255,255,255,0.06)',
@@ -2879,7 +2912,10 @@ export default function App() {
                   borderRadius: 12,
                 }}
               >
-                <Carregando texto="Consultando a API de vagas..." />
+                <Carregando
+                  texto={faseVagas.texto}
+                  detalhe={faseVagas.detalhe}
+                />
               </div>
             ) : !mostrarResultados ? (
               <EsperaBusca />

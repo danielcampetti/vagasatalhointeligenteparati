@@ -43,8 +43,19 @@ export function AvisoErro({ texto }) {
   )
 }
 
-/** Espera de uma chamada de rede. Um giro só, sem etapa detalhada. */
-export function Carregando({ texto = 'Analisando currículo e comparando vagas...' }) {
+/**
+ * Espera de uma chamada de rede.
+ *
+ * O `detalhe` é a segunda linha, opcional. Ele existe para a espera do
+ * ranking, que dura ~25s: quem está olhando precisa saber que a lista não vem
+ * antes da nota, senão a demora parece defeito — que é exatamente a impressão
+ * que a tabela-primeiro-notas-depois causava antes. Quem tem uma etapa só
+ * continua passando só `texto`.
+ */
+export function Carregando({
+  texto = 'Analisando currículo e comparando vagas...',
+  detalhe = null,
+}) {
   return (
     <div
       style={{
@@ -69,6 +80,20 @@ export function Carregando({ texto = 'Analisando currículo e comparando vagas..
       <div style={{ fontSize: 13.5, color: '#8A94A6' }}>
         {texto}
       </div>
+      {detalhe && (
+        <div
+          style={{
+            fontSize: 12.5,
+            color: '#5F6B7E',
+            marginTop: -8,
+            maxWidth: 320,
+            textAlign: 'center',
+            lineHeight: 1.6,
+          }}
+        >
+          {detalhe}
+        </div>
+      )}
     </div>
   )
 }
