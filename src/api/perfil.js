@@ -12,7 +12,7 @@
  */
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import { z } from 'zod'
-import { ErroClaude, TIPOS, chamarEstruturado } from './claude'
+import { ErroClaude, MAX_TOKENS, TIPOS, chamarEstruturado } from './claude'
 
 /**
  * `.nullable()` em quase tudo é a decisão central deste módulo: null significa
@@ -131,7 +131,7 @@ export async function extrairPerfil({ base64, texto }) {
   // na ordem certa — ver o cabeçalho de claude.js para o porquê da ordem ser
   // fixa. Este módulo nunca chama o SDK direto.
   const resposta = await chamarEstruturado(TIPOS.PERFIL, {
-    max_tokens: 2000,
+    max_tokens: MAX_TOKENS,
     output_config: { format: zodOutputFormat(PerfilSchema) },
     messages: [
       {

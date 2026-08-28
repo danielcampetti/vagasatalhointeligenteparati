@@ -7,7 +7,7 @@ vi.mock('./claude', async (importOriginal) => {
   const real = await importOriginal()
   return { ...real, chamarTexto: vi.fn() }
 })
-import { chamarTexto, TIPOS } from './claude'
+import { MAX_TOKENS, chamarTexto, TIPOS } from './claude'
 import { justificar, montarPrompt } from './justificativa'
 
 const PERFIL = { cargo_deduzido: 'Técnico de TI', tecnologias: [] }
@@ -45,7 +45,7 @@ describe('montarPrompt', () => {
 // do seu próprio comportamento fim a fim. `chamarTexto` é mockado (topo do
 // arquivo) — zero rede.
 describe('justificar', () => {
-  test('caminho feliz: uma chamada, TIPOS.JUSTIFICATIVA, max_tokens 2000, leva perfil/texto/vaga, e devolve a prosa', async () => {
+  test('caminho feliz: uma chamada, TIPOS.JUSTIFICATIVA, max_tokens do MAX_TOKENS, leva perfil/texto/vaga, e devolve a prosa', async () => {
     chamarTexto.mockClear()
     chamarTexto.mockResolvedValue({
       content: [{ type: 'text', text: 'Combina bem porque...' }],
@@ -56,7 +56,7 @@ describe('justificar', () => {
     expect(chamarTexto).toHaveBeenCalledTimes(1)
     const [tipo, params] = chamarTexto.mock.calls[0]
     expect(tipo).toBe(TIPOS.JUSTIFICATIVA)
-    expect(params.max_tokens).toBe(2000)
+    expect(params.max_tokens).toBe(MAX_TOKENS)
     // A instrução do chamador viaja no system, não só o texto fixo do módulo.
     expect(params.system).toContain('instrução')
     const conteudo = params.messages[0].content

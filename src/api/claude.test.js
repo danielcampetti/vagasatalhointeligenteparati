@@ -4,6 +4,7 @@ import { PRECOS, definirTeto, lerCusto, registrarChamada } from '../custo'
 import configVite, { guardaDeChave } from '../../vite.config.js'
 import {
   ErroClaude,
+  MAX_TOKENS,
   MODELO,
   TIPOS,
   chamarEstruturado,
@@ -17,6 +18,24 @@ import {
 
 beforeEach(() => localStorage.clear())
 afterEach(() => vi.restoreAllMocks())
+
+// O `max_tokens` limita TUDO que o modelo gera: o pensamento sai do mesmo
+// orçamento da resposta visível. O claude-sonnet-5 pensa por padrão (adaptive)
+// sem ninguém pedir, e isso não aparece em nenhum parâmetro do código — foi
+// preciso medir a resposta real para ver.
+//
+// Medido contra a API, num lote de ranking de 10 vagas: 1.476 tokens de
+// pensamento para 796 caracteres de JSON, 1.888 de saída no total. Contra os
+// 2.000 que havia aqui, coube por 112 tokens numa chamada e não coube na
+// seguinte — o lote saía cortado no meio de uma string e a tela mostrava "—"
+// em toda vaga.
+describe('MAX_TOKENS', () => {
+  const PENSAMENTO_MEDIDO = 1476
+
+  test('reserva espaço para o pensamento, não só para a resposta visível', () => {
+    expect(MAX_TOKENS).toBeGreaterThan(PENSAMENTO_MEDIDO * 3)
+  })
+})
 
 describe('conferirTeto', () => {
   test('passa quando está abaixo', () => {

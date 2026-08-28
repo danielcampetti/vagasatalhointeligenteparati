@@ -9,7 +9,7 @@
  * mais um cache para invalidar toda vez que o perfil mudasse — mais estado
  * para uma tela que já é barata de recalcular.
  */
-import { TIPOS, chamarTexto } from './claude'
+import { MAX_TOKENS, TIPOS, chamarTexto } from './claude'
 import { resumirVaga } from './ranking'
 
 /**
@@ -29,7 +29,7 @@ export async function justificar(perfil, texto, instrucao, vaga) {
   // `chamarTexto`, não `chamarEstruturado`: a saída aqui é prosa para o
   // aluno ler, sem schema — o invólucro já cuida de teto, contagem e recusa.
   const resposta = await chamarTexto(TIPOS.JUSTIFICATIVA, {
-    max_tokens: 2000,
+    max_tokens: MAX_TOKENS,
     system: `${instrucao}\n\nExplique em dois ou três parágrafos curtos por que esta vaga combina ou não com este candidato. Seja concreto: cite as tecnologias que casam e as que faltam. Não invente requisito que não está no anúncio nem experiência que não está no currículo. Campo null no perfil significa que o currículo não informa aquilo — diga isso em vez de supor.`,
     messages: [{ role: 'user', content: montarPrompt(perfil, texto, vaga) }],
   })

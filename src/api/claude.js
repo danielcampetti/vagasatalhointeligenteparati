@@ -21,6 +21,33 @@ import { dolares, excedeuTeto, lerCusto, registrarChamada } from '../custo'
 export const MODELO = 'claude-sonnet-5'
 
 /**
+ * Teto de saída de toda chamada — perfil, ranking e justificativa.
+ *
+ * `max_tokens` limita TUDO que o modelo gera, e o pensamento sai do mesmo
+ * orçamento da resposta visível. O `claude-sonnet-5` pensa por padrão
+ * (adaptive): não há parâmetro nenhum ligando isso no código, então lendo só o
+ * código não dá para ver que existe. Foi preciso medir a resposta real.
+ *
+ * O que a medição mostrou, num lote de ranking de 10 vagas: 1.476 tokens de
+ * pensamento para 796 caracteres de JSON — 1.888 de saída, contra os 2.000
+ * que este valor tinha antes. Coube por 112 tokens numa chamada e não coube na
+ * seguinte: a resposta saía cortada no meio de uma string, o lote inteiro
+ * morria em `conferirResposta`, e a tela mostrava "—" em toda vaga.
+ *
+ * Por que 16.000 e não 2.500: `max_tokens` é limite, não reserva. Só se paga
+ * o que o modelo de fato gerar, então folga aqui não custa nada — e o corte no
+ * meio da resposta custa a chamada inteira, que já foi cobrada. 16.000 é o
+ * padrão recomendado para chamada sem streaming (acima disso o risco passa a
+ * ser o timeout de HTTP do SDK, não o teto).
+ *
+ * Se um dia o custo do pensamento incomodar, o controle é
+ * `output_config.effort` ('low' a 'max', o padrão é 'high') — que regula
+ * quanto o modelo pensa. Mexer neste teto não regula: só decide se a resposta
+ * cabe ou é cortada.
+ */
+export const MAX_TOKENS = 16000
+
+/**
  * Os três valores de `tipo` que `contabilizar` grava — centralizados para
  * que um typo não vire, em silêncio, uma linha que nunca aparece na aba
  * Controle. Perfil (Task 6), ranking (Task 7), justificativa (Task 8).

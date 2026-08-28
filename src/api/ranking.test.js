@@ -8,7 +8,7 @@ vi.mock('./claude', async (importOriginal) => {
   const real = await importOriginal()
   return { ...real, chamarEstruturado: vi.fn() }
 })
-import { chamarEstruturado, TIPOS } from './claude'
+import { MAX_TOKENS, chamarEstruturado, TIPOS } from './claude'
 import {
   NotasSchema,
   TAMANHO_LOTE,
@@ -36,7 +36,6 @@ describe('resumirVaga', () => {
   test('leva só o que a nota precisa', () => {
     const r = resumirVaga(VAGA)
     expect(r).toEqual({
-      id: 'a1',
       cargo: 'Técnico de TI',
       empresa: 'Acme',
       cidade: 'Caxias do Sul, RS',
@@ -57,71 +56,80 @@ describe('resumirVaga', () => {
 })
 
 describe('validarNotas', () => {
-  const ids = ['a1', 'a2', 'a3']
+  const refs = [0, 1, 2]
 
   test('caso feliz: todas voltam', () => {
     const { validas, faltando } = validarNotas(
       [
-        { id: 'a1', nota: 80, motivo: 'x' },
-        { id: 'a2', nota: 60, motivo: 'y' },
-        { id: 'a3', nota: 40, motivo: 'z' },
+        { ref: 0, nota: 80, motivo: 'x' },
+        { ref: 1, nota: 60, motivo: 'y' },
+        { ref: 2, nota: 40, motivo: 'z' },
       ],
-      ids,
+      refs,
     )
     expect(faltando).toEqual([])
-    expect(validas.get('a1').nota).toBe(80)
+    expect(validas.get(0).nota).toBe(80)
   })
 
-  test('id inventado é descartado', () => {
+  test('ref inventado é descartado', () => {
     const { validas, faltando } = validarNotas(
       [
-        { id: 'a1', nota: 80, motivo: 'x' },
-        { id: 'INVENTADO', nota: 99, motivo: 'y' },
+        { ref: 0, nota: 80, motivo: 'x' },
+        { ref: 99, nota: 99, motivo: 'y' },
       ],
-      ids,
+      refs,
     )
-    expect(validas.has('INVENTADO')).toBe(false)
-    expect(faltando).toEqual(['a2', 'a3'])
+    expect(validas.has(99)).toBe(false)
+    expect(faltando).toEqual([1, 2])
   })
 
   test('duplicata: a primeira vence', () => {
     const { validas } = validarNotas(
       [
-        { id: 'a1', nota: 80, motivo: 'primeira' },
-        { id: 'a1', nota: 10, motivo: 'segunda' },
+        { ref: 0, nota: 80, motivo: 'primeira' },
+        { ref: 0, nota: 10, motivo: 'segunda' },
       ],
-      ids,
+      refs,
     )
-    expect(validas.get('a1').motivo).toBe('primeira')
+    expect(validas.get(0).motivo).toBe('primeira')
   })
 
   test('resposta vazia deixa todas faltando', () => {
-    const { validas, faltando } = validarNotas([], ids)
+    const { validas, faltando } = validarNotas([], refs)
     expect(validas.size).toBe(0)
-    expect(faltando).toEqual(ids)
+    expect(faltando).toEqual(refs)
   })
 
   test('resposta não-array não derruba', () => {
-    const { faltando } = validarNotas(null, ids)
-    expect(faltando).toEqual(ids)
+    const { faltando } = validarNotas(null, refs)
+    expect(faltando).toEqual(refs)
   })
 
   test('nota fora de 0-100 é descartada', () => {
     const { validas, faltando } = validarNotas(
       [
-        { id: 'a1', nota: 150, motivo: 'x' },
-        { id: 'a2', nota: -5, motivo: 'y' },
-        { id: 'a3', nota: 70, motivo: 'z' },
+        { ref: 0, nota: 150, motivo: 'x' },
+        { ref: 1, nota: -5, motivo: 'y' },
+        { ref: 2, nota: 70, motivo: 'z' },
       ],
-      ids,
+      refs,
     )
     expect(validas.size).toBe(1)
-    expect(faltando.sort()).toEqual(['a1', 'a2'])
+    expect(faltando).toEqual([0, 1])
   })
 
   test('nota não-numérica é descartada', () => {
-    const { faltando } = validarNotas([{ id: 'a1', nota: 'oitenta' }], ids)
-    expect(faltando).toContain('a1')
+    const { faltando } = validarNotas([{ ref: 0, nota: 'oitenta' }], refs)
+    expect(faltando).toContain(0)
+  })
+
+  // O schema declara integer, e a revalidação do SDK é tudo-ou-nada — um ref
+  // em texto derrubaria o lote antes de chegar aqui. Este é o cinto de
+  // segurança para o caso de ele chegar assim mesmo, e o motivo de o
+  // `Number()` existir no validarNotas.
+  test('ref em texto casa com o ref numérico enviado', () => {
+    const { validas } = validarNotas([{ ref: '1', nota: 70, motivo: 'x' }], refs)
+    expect(validas.get(1).nota).toBe(70)
   })
 })
 
@@ -148,7 +156,7 @@ describe('aplicarNotas', () => {
 describe('NotasSchema', () => {
   test('aceita a forma esperada', () => {
     expect(() =>
-      NotasSchema.parse({ notas: [{ id: 'a1', nota: 80, motivo: 'x' }] }),
+      NotasSchema.parse({ notas: [{ ref: 0, nota: 80, motivo: 'x' }] }),
     ).not.toThrow()
   })
 
@@ -158,7 +166,7 @@ describe('NotasSchema', () => {
   // `validarNotas`, por item. Veja o comentário do NotasSchema.
   test('nota fora de 0-100 passa pelo schema — quem filtra é o validarNotas', () => {
     expect(() =>
-      NotasSchema.parse({ notas: [{ id: 'a1', nota: 150, motivo: 'x' }] }),
+      NotasSchema.parse({ notas: [{ ref: 0, nota: 150, motivo: 'x' }] }),
     ).not.toThrow()
   })
 
@@ -173,12 +181,12 @@ describe('NotasSchema', () => {
   // continua no schema — diferente de minimum/maximum, que não são.
   test('nota fracionária é rejeitada: o tipo integer permanece', () => {
     expect(() =>
-      NotasSchema.parse({ notas: [{ id: 'a1', nota: 80.5, motivo: 'x' }] }),
+      NotasSchema.parse({ notas: [{ ref: 0, nota: 80.5, motivo: 'x' }] }),
     ).toThrow()
   })
 
   test('item sem motivo é rejeitado', () => {
-    expect(() => NotasSchema.parse({ notas: [{ id: 'a1', nota: 80 }] })).toThrow()
+    expect(() => NotasSchema.parse({ notas: [{ ref: 0, nota: 80 }] })).toThrow()
   })
 })
 
@@ -189,17 +197,30 @@ describe('NotasSchema', () => {
 // próprio comportamento fim a fim. `chamarEstruturado` é mockado (topo do
 // arquivo) — zero rede.
 function vaga(id) {
-  return { ...VAGA, id }
+  // `empresa` carrega o id porque o id em si não viaja mais para o modelo —
+  // é por ela que estes testes identificam quem entrou em cada lote.
+  return { ...VAGA, id, empresa: id }
+}
+
+/**
+ * A composição de um lote, na ordem em que foi enviada. O ref de cada vaga é
+ * a sua posição aqui, e é por isso que um mock pode responder sem saber nada
+ * além do que recebeu.
+ */
+function loteDe(params) {
+  return [...params.messages[0].content.matchAll(/"empresa": "([^"]+)"/g)].map(
+    (m) => m[1],
+  )
 }
 
 describe('ranquear', () => {
-  test('caminho feliz: uma chamada, TIPOS.RANKING, max_tokens 2000, output_config com schema, e volta com nota em cada vaga', async () => {
+  test('caminho feliz: uma chamada, TIPOS.RANKING, max_tokens do MAX_TOKENS, output_config com schema, e volta com nota em cada vaga', async () => {
     chamarEstruturado.mockClear()
     chamarEstruturado.mockResolvedValue({
       parsed_output: {
         notas: [
-          { id: 'a1', nota: 80, motivo: 'ok' },
-          { id: 'a2', nota: 60, motivo: 'ok' },
+          { ref: 0, nota: 80, motivo: 'ok' },
+          { ref: 1, nota: 60, motivo: 'ok' },
         ],
       },
     })
@@ -210,7 +231,7 @@ describe('ranquear', () => {
     expect(chamarEstruturado).toHaveBeenCalledTimes(1)
     const [tipo, params] = chamarEstruturado.mock.calls[0]
     expect(tipo).toBe(TIPOS.RANKING)
-    expect(params.max_tokens).toBe(2000)
+    expect(params.max_tokens).toBe(MAX_TOKENS)
     expect(params.output_config.format).toBeTruthy()
     // O perfil e as vagas resumidas viajam no conteúdo — sem isso a Claude
     // não teria com o que pontuar.
@@ -226,10 +247,11 @@ describe('ranquear', () => {
     chamarEstruturado.mockClear()
     chamarEstruturado
       .mockResolvedValueOnce({
-        parsed_output: { notas: [{ id: 'a1', nota: 80, motivo: 'ok' }] }, // a2 não veio
+        parsed_output: { notas: [{ ref: 0, nota: 80, motivo: 'ok' }] }, // ref 1 não veio
       })
       .mockResolvedValueOnce({
-        parsed_output: { notas: [{ id: 'a2', nota: 55, motivo: 'segunda' }] },
+        // Lote novo, refs novos: aqui o ref 0 é a a2, não a a1.
+        parsed_output: { notas: [{ ref: 0, nota: 55, motivo: 'segunda' }] },
       })
 
     const vagas = [vaga('a1'), vaga('a2')]
@@ -240,7 +262,7 @@ describe('ranquear', () => {
     // é o que mantém a segunda volta barata.
     const conteudoSegunda = chamarEstruturado.mock.calls[1][1].messages[0].content
     expect(conteudoSegunda).toContain('a2')
-    expect(conteudoSegunda).not.toContain('"id": "a1"')
+    expect(conteudoSegunda).not.toContain('"empresa": "a1"')
 
     expect(resultado.find((v) => v.id === 'a1').rank).toBe(80)
     expect(resultado.find((v) => v.id === 'a2').rank).toBe(55)
@@ -250,7 +272,7 @@ describe('ranquear', () => {
     chamarEstruturado.mockClear()
     chamarEstruturado
       .mockResolvedValueOnce({
-        parsed_output: { notas: [{ id: 'a1', nota: 80, motivo: 'ok' }] },
+        parsed_output: { notas: [{ ref: 0, nota: 80, motivo: 'ok' }] },
       })
       .mockResolvedValueOnce({ parsed_output: { notas: [] } }) // a2 segue sem nota
 
@@ -276,7 +298,7 @@ describe('ranquear', () => {
     // as 25 em toda chamada simula o modelo respondendo certo a cada uma sem
     // eu precisar inspecionar o conteúdo de cada chamada aqui.
     chamarEstruturado.mockResolvedValue({
-      parsed_output: { notas: ids.map((id) => ({ id, nota: 50, motivo: 'x' })) },
+      parsed_output: { notas: ids.map((_, ref) => ({ ref, nota: 50, motivo: 'x' })) },
     })
 
     const vagas = ids.map((id) => vaga(id))
@@ -300,14 +322,14 @@ describe('ranquear', () => {
     chamarEstruturado.mockClear()
     const ids = Array.from({ length: 13 }, (_, i) => `v${i}`)
     chamarEstruturado.mockResolvedValue({
-      parsed_output: { notas: ids.map((id) => ({ id, nota: 50, motivo: 'x' })) },
+      parsed_output: { notas: ids.map((_, ref) => ({ ref, nota: 50, motivo: 'x' })) },
     })
 
     const vagas = ids.map((id) => vaga(id))
     await ranquear({ cargo: 'x' }, 'instrução', vagas)
 
     const tamanhosDosLotes = chamarEstruturado.mock.calls.map(
-      ([, params]) => (params.messages[0].content.match(/"id": "/g) || []).length,
+      ([, params]) => loteDe(params).length,
     )
     expect(tamanhosDosLotes).toEqual([7, 6])
     expect(tamanhosDosLotes.every((n) => n > 1)).toBe(true)
@@ -325,10 +347,7 @@ describe('ranquear', () => {
     // isolado de antes, só os 12 primeiros ids apareceriam em alguma chamada.
     const enviados = new Set()
     for (const [, params] of chamarEstruturado.mock.calls) {
-      const conteudo = params.messages[0].content
-      for (const id of ids) {
-        if (conteudo.includes(`"id": "${id}"`)) enviados.add(id)
-      }
+      for (const id of loteDe(params)) enviados.add(id)
     }
     expect(enviados).toEqual(new Set(ids))
   })
@@ -337,12 +356,12 @@ describe('ranquear', () => {
     chamarEstruturado.mockClear()
     const ids = Array.from({ length: 25 }, (_, i) => `v${i}`)
     chamarEstruturado.mockImplementation(async (_tipo, params) => {
-      const conteudo = params.messages[0].content
-      const enviados = ids.filter((id) => conteudo.includes(`"id": "${id}"`))
+      const lote = loteDe(params)
       // v24 nunca volta pontuada, nem na primeira nem na segunda volta.
-      const notas = enviados
-        .filter((id) => id !== 'v24')
-        .map((id) => ({ id, nota: 70, motivo: 'x' }))
+      const notas = lote
+        .map((id, ref) => ({ id, ref }))
+        .filter(({ id }) => id !== 'v24')
+        .map(({ ref }) => ({ ref, nota: 70, motivo: 'x' }))
       return { parsed_output: { notas } }
     })
 
@@ -363,17 +382,16 @@ describe('ranquear', () => {
     chamarEstruturado.mockClear()
     const ids = Array.from({ length: 13 }, (_, i) => `v${i}`) // fatia em [7, 6]
     chamarEstruturado.mockImplementation(async (_tipo, params) => {
-      const conteudo = params.messages[0].content
+      const lote = loteDe(params)
       // O lote que contém v10 (o segundo, [7,6] = v7..v12) sempre lança —
       // simula o teto de custo estourando e continuando estourado numa
       // eventual segunda volta.
-      if (conteudo.includes('"id": "v10"')) {
+      if (lote.includes('v10')) {
         throw new Error('Teto de custo atingido')
       }
-      const enviados = ids.filter((id) => conteudo.includes(`"id": "${id}"`))
       return {
         parsed_output: {
-          notas: enviados.map((id) => ({ id, nota: 90, motivo: 'x' })),
+          notas: lote.map((_, ref) => ({ ref, nota: 90, motivo: 'x' })),
         },
       }
     })
@@ -387,5 +405,72 @@ describe('ranquear', () => {
     // O lote que lançou fica sem nota — degrada, não derruba a lista inteira.
     expect(resultado).toHaveLength(13)
     expect(resultado.find((v) => v.id === 'v10').rank).toBe(null)
+  })
+})
+
+// Estes três testes vieram de um defeito visto na tela, não de raciocínio: com
+// a API de verdade o Rank IA saía "—" em toda vaga. O `job_id` da JSearch tem
+// **402 caracteres** de base64, e o lote pedia ao modelo que devolvesse esse id
+// verbatim para cada uma das 12 vagas — ~1.930 tokens só de id, contra um
+// `max_tokens` de 2.000. A resposta era cortada no meio de uma string e o lote
+// inteiro morria. Os testes acima nunca pegariam isso: todos usam ids de dois
+// caracteres (`a1`, `v10`), e o defeito só existe em função do tamanho do id.
+describe('id gigante da JSearch', () => {
+  const ID_REAL = 'q'.repeat(402)
+
+  // Sem o helper `vaga()`: ele copia o id para o `empresa` em favor dos testes
+  // de lote, e aqui é justamente o id que não pode aparecer no prompt.
+  const comId = (id) => ({ ...VAGA, id })
+
+  test('o id da vaga não viaja para o modelo — nem na ida, nem para ser ecoado na volta', async () => {
+    chamarEstruturado.mockClear()
+    chamarEstruturado.mockResolvedValue({
+      parsed_output: { notas: [{ ref: 0, nota: 80, motivo: 'ok' }] },
+    })
+
+    await ranquear({ cargo: 'x' }, 'instrução', [comId(ID_REAL)])
+
+    const conteudo = chamarEstruturado.mock.calls[0][1].messages[0].content
+    expect(conteudo).not.toContain(ID_REAL)
+  })
+
+  test('a nota volta pelo ref curto e pousa na vaga certa', async () => {
+    chamarEstruturado.mockClear()
+    chamarEstruturado.mockResolvedValue({
+      parsed_output: {
+        notas: [
+          { ref: 0, nota: 80, motivo: 'primeira' },
+          { ref: 1, nota: 40, motivo: 'segunda' },
+        ],
+      },
+    })
+
+    const vagas = [comId(`${ID_REAL}A`), comId(`${ID_REAL}B`)]
+    const resultado = await ranquear({ cargo: 'x' }, 'instrução', vagas)
+
+    expect(resultado.find((v) => v.id === `${ID_REAL}A`).rank).toBe(80)
+    expect(resultado.find((v) => v.id === `${ID_REAL}B`).rank).toBe(40)
+  })
+
+  // O ref é posicional *dentro do lote*, e a segunda volta remonta um lote só
+  // com quem faltou — o ref 0 da segunda volta é outra vaga que o ref 0 da
+  // primeira. Traduzir ref→id dentro do próprio lote é o que impede a nota de
+  // pousar na vaga errada aqui.
+  test('o ref é relativo ao lote: na segunda volta, ref 0 é a vaga que faltou, não a primeira da lista', async () => {
+    chamarEstruturado.mockClear()
+    chamarEstruturado
+      .mockResolvedValueOnce({
+        parsed_output: { notas: [{ ref: 0, nota: 80, motivo: 'ok' }] }, // ref 1 não veio
+      })
+      .mockResolvedValueOnce({
+        parsed_output: { notas: [{ ref: 0, nota: 55, motivo: 'segunda' }] },
+      })
+
+    const vagas = [comId(`${ID_REAL}A`), comId(`${ID_REAL}B`)]
+    const resultado = await ranquear({ cargo: 'x' }, 'instrução', vagas)
+
+    expect(chamarEstruturado).toHaveBeenCalledTimes(2)
+    expect(resultado.find((v) => v.id === `${ID_REAL}A`).rank).toBe(80)
+    expect(resultado.find((v) => v.id === `${ID_REAL}B`).rank).toBe(55)
   })
 })

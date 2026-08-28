@@ -30,7 +30,7 @@
  */
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import { z } from 'zod'
-import { TIPOS, chamarEstruturado } from './claude'
+import { MAX_TOKENS, TIPOS, chamarEstruturado } from './claude'
 
 export const TAMANHO_LOTE = 12
 
@@ -64,7 +64,7 @@ export const TAMANHO_LOTE = 12
 export const NotasSchema = z.object({
   notas: z.array(
     z.object({
-      id: z.string(),
+      ref: z.number().int().describe('O ref da vaga, exatamente como veio.'),
       nota: z.number().int().describe('Nota de 0 a 100.'),
       motivo: z.string().describe('Motivo em até 10 palavras.'),
     }),
@@ -74,7 +74,6 @@ export const NotasSchema = z.object({
 /** Só o que a nota precisa. Campos de tela (fav, seen, status) não vão. */
 export function resumirVaga(vaga) {
   return {
-    id: vaga.id,
     cargo: vaga.cargo,
     empresa: vaga.empresa,
     cidade: vaga.cidade,
@@ -91,21 +90,26 @@ export function resumirVaga(vaga) {
  * e duplicata não sobrescreve. O que não passar entra em `faltando` e vai numa
  * segunda chamada.
  */
-export function validarNotas(notas, idsEnviados) {
-  const permitidos = new Set(idsEnviados)
+export function validarNotas(notas, refsEnviados) {
+  const permitidos = new Set(refsEnviados)
   const validas = new Map()
 
   for (const item of Array.isArray(notas) ? notas : []) {
-    if (!permitidos.has(item?.id)) continue
-    if (validas.has(item.id)) continue // a primeira vence
+    // O schema já pede inteiro, mas este módulo existe para pegar falha
+    // silenciosa: um ref que chegasse como texto casaria falso contra um Set
+    // de números e viraria vaga sem nota, sem ninguém perceber.
+    const ref = Number(item?.ref)
+    if (!Number.isInteger(ref)) continue
+    if (!permitidos.has(ref)) continue
+    if (validas.has(ref)) continue // a primeira vence
     const nota = Number(item.nota)
     if (!Number.isFinite(nota) || nota < 0 || nota > 100) continue
-    validas.set(item.id, { nota: Math.round(nota), motivo: item.motivo ?? '' })
+    validas.set(ref, { nota: Math.round(nota), motivo: item.motivo ?? '' })
   }
 
   return {
     validas,
-    faltando: idsEnviados.filter((id) => !validas.has(id)),
+    faltando: refsEnviados.filter((ref) => !validas.has(ref)),
   }
 }
 
@@ -120,23 +124,45 @@ export function aplicarNotas(vagas, validas) {
 }
 
 async function pontuarLote(perfil, instrucao, vagas) {
+  // O `ref` é a posição no lote: 0, 1, 2. Ele existe porque o `job_id` da
+  // JSearch é base64 de ~400 caracteres, e pedir ao modelo que ecoasse esse id
+  // para as 12 vagas do lote gastava ~1.930 tokens de saída contra um
+  // `max_tokens` de 2.000 — a resposta vinha cortada no meio de uma string e o
+  // lote inteiro morria, com "—" em toda vaga na tela. Nenhum teste pegou isso
+  // porque todos usavam id de dois caracteres: o defeito só existe em função
+  // do tamanho do id, e o mock não tinha como exibi-lo.
+  //
+  // O ref não escapa desta função. Ele é posicional DENTRO do lote, e a
+  // segunda volta remonta um lote só com quem faltou, onde o ref 0 já é outra
+  // vaga. Traduzir de volta aqui, antes de devolver, é o que impede a nota de
+  // pousar na vaga errada.
+  const enviadas = vagas.map((vaga, ref) => ({ ref, ...resumirVaga(vaga) }))
   // Cada lote passa pelo invólucro, então o teto é reconferido a cada chamada
   // — inclusive na segunda volta, que sai depois da primeira já ter gasto.
   const resposta = await chamarEstruturado(TIPOS.RANKING, {
-    max_tokens: 2000,
-    system: `${instrucao}\n\nCampos com null significam que o currículo não informa aquilo. Nesse caso ignore a cláusula correspondente em vez de supor um valor — uma pretensão salarial ausente não é uma pretensão baixa.\n\nDevolva uma nota para CADA vaga recebida, usando o id exatamente como veio. O motivo tem no máximo 10 palavras.`,
+    max_tokens: MAX_TOKENS,
+    system: `${instrucao}\n\nCampos com null significam que o currículo não informa aquilo. Nesse caso ignore a cláusula correspondente em vez de supor um valor — uma pretensão salarial ausente não é uma pretensão baixa.\n\nDevolva uma nota para CADA vaga recebida, usando o ref exatamente como veio. O motivo tem no máximo 10 palavras.`,
     output_config: { format: zodOutputFormat(NotasSchema) },
     messages: [
       {
         role: 'user',
-        content: `Perfil do candidato:\n${JSON.stringify(perfil, null, 2)}\n\nVagas:\n${JSON.stringify(vagas.map(resumirVaga), null, 2)}`,
+        content: `Perfil do candidato:\n${JSON.stringify(perfil, null, 2)}\n\nVagas:\n${JSON.stringify(enviadas, null, 2)}`,
       },
     ],
   })
 
-  // O schema garante a forma de cada item; ele NÃO garante que os ids sejam os
-  // que enviamos, nem que todos voltaram. Essa parte é a `validarNotas`.
-  return validarNotas(resposta.parsed_output?.notas, vagas.map((v) => v.id))
+  // O schema garante a forma de cada item; ele NÃO garante que os refs sejam
+  // os que enviamos, nem que todos voltaram. Essa parte é a `validarNotas`.
+  const { validas, faltando } = validarNotas(
+    resposta.parsed_output?.notas,
+    enviadas.map((v) => v.ref),
+  )
+
+  // Do ref de volta ao id real: daqui para cima o módulo inteiro fala em id.
+  return {
+    validas: new Map([...validas].map(([ref, valor]) => [vagas[ref].id, valor])),
+    faltando: faltando.map((ref) => vagas[ref].id),
+  }
 }
 
 /**

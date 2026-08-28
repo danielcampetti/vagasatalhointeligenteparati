@@ -7,7 +7,7 @@ vi.mock('./claude', async (importOriginal) => {
   const real = await importOriginal()
   return { ...real, chamarEstruturado: vi.fn() }
 })
-import { chamarEstruturado, TIPOS } from './claude'
+import { MAX_TOKENS, chamarEstruturado, TIPOS } from './claude'
 import {
   PerfilSchema,
   conferirPerfil,
@@ -128,7 +128,7 @@ describe('conferirPerfil', () => {
 // ponta — monta a chamada, lê parsed_output, valida — com `chamarEstruturado`
 // mockado (ver vi.mock('./claude') no topo do arquivo). Zero rede.
 describe('extrairPerfil', () => {
-  test('caminho PDF: manda bloco document+text, max_tokens 2000, TIPOS.PERFIL, e devolve o perfil validado', async () => {
+  test('caminho PDF: manda bloco document+text, max_tokens do MAX_TOKENS, TIPOS.PERFIL, e devolve o perfil validado', async () => {
     chamarEstruturado.mockClear()
     chamarEstruturado.mockResolvedValue({ parsed_output: PERFIL_BOM })
 
@@ -140,7 +140,7 @@ describe('extrairPerfil', () => {
     expect(tipo).toBe(TIPOS.PERFIL)
     // 2000, não mais 8000: a folga era só para o texto_extraido do PDF
     // (removido por custo — ver conteudoDePdf em perfil.js).
-    expect(params.max_tokens).toBe(2000)
+    expect(params.max_tokens).toBe(MAX_TOKENS)
     expect(params.messages).toHaveLength(1)
     expect(params.messages[0].role).toBe('user')
     const conteudo = params.messages[0].content
