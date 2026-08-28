@@ -1,4 +1,4 @@
-# Onde paramos — 27/08/2026
+# Onde paramos — 28/08/2026
 
 Retomada rápida do protótipo VAGAS. O **README.md** explica *como as coisas
 funcionam*; este arquivo diz *em que pé estão* e *o que fazer a seguir*.
@@ -13,9 +13,17 @@ funcionam*; este arquivo diz *em que pé estão* e *o que fazer a seguir*.
 
 ## Estado do repositório
 
-Tudo commitado, `git status` limpo. 46 commits na branch `avaliacao-ia`, sendo
-os 29 mais recentes a Avaliação IA inteira — do desenho ao medidor de custo,
-passando pela revisão final e pela onda de correções que ela gerou.
+Tudo commitado, `git status` limpo. A branch `avaliacao-ia` está **51 commits
+à frente do `main`** (`git rev-list --count main..avaliacao-ia` — a contagem
+anterior deste documento não batia com nenhuma medida, por isso agora vem com o
+comando ao lado). Desses, os 29 do meio são a Avaliação IA inteira — do desenho
+ao medidor de custo, passando pela revisão final e pela onda de correções que
+ela gerou — e os 3 do topo são o trabalho de 28/08: a correção do Rank IA, a
+lista que passou a esperar o ranking, e este documento.
+
+**Nada disso está no remoto.** O `main` local está 2 commits à frente do
+`origin/main`, e a `avaliacao-ia` nunca foi publicada — o que está no GitHub
+é anterior até à busca real da JSearch.
 
 **Passou por revisão final**, escopada ao que nunca tinha tido gate próprio: o
 `ranking.js`, a `justificativa.js` e a camada de tela toda. Ela achou três
@@ -46,18 +54,23 @@ caminho: o `base` do Vite aponta para o nome do repositório, então a raiz
 npm test
 ```
 
-120 testes, 7 arquivos, todos verdes. Não existia teste nenhum na revisão
+132 testes, 8 arquivos, todos verdes. Não existia teste nenhum na revisão
 anterior.
 
 ---
 
-## Roteiro de teste no navegador — a próxima coisa a fazer
+## Roteiro de teste no navegador — parcialmente feito
 
-**Nada disto foi testado contra a API real.** A implementação inteira rodou com
-a chamada mockada, por decisão de não gastar crédito. Os módulos estão testados
-e revisados, mas o caminho do clique até a resposta só foi verificado em duas
-etapas (extração de currículo por `.docx` e por texto colado); o resto é
-código correto que ninguém viu funcionar.
+**Em 28/08 o roteiro saiu do papel pela primeira vez, e a primeira coisa que
+ele encontrou foi um defeito que nenhum teste pegava: o Rank IA saía "—" em
+toda vaga, nas duas abas.** A causa e a correção estão nas Armadilhas, nas duas
+entradas sobre orçamento de saída — vale ler antes de mexer em qualquer chamada
+à Claude.
+
+Verificados contra a API real, na tela: **1** (currículo colado, com a
+profundidade das tecnologias saindo certa), **3** (ranking na aba Vagas) e
+**5** (Vaga Inteligente). Os passos **2** (pretensão), **4** (justificativa) e
+**6** (conferir o gasto em US$) seguem sem verificação.
 
 Faça na ordem. O custo total é de centavos, e cada passo depende do anterior.
 
@@ -72,8 +85,9 @@ cidade, e as tecnologias com a profundidade entre parênteses — `produção`,
 **2. Corrija a pretensão.** O campo vem vazio quase sempre — currículo não traz
 isso. Preencha, dê F5, confirme que continuou. Custo zero.
 
-**3. Ranking.** Aba Vagas → busque um cargo e uma cidade. As vagas aparecem
-primeiro; as notas chegam alguns segundos depois. Ordene por Rank IA e veja se
+**3. Ranking.** Aba Vagas → busque um cargo e uma cidade. A tela mostra
+"Avaliando N vagas com a IA..." e a lista aparece **já pontuada** — vaga e nota
+juntas, nunca a tabela primeiro e as notas depois. Ordene por Rank IA e veja se
 a ordem muda. Custa 1 requisição JSearch + ~US$ 0,024.
 
 > **Prefira uma consulta já em cache** para não gastar JSearch. A aba Controle
@@ -180,6 +194,8 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 | Ranking em lote (perfil + N vagas, uma chamada) | Decisão antiga (era a pendência 3), agora implementada em `ranking.js`: currículo viaja uma vez, a saída cara encolhe para `{id, nota, motivo}`. Lote de 12 (`TAMANHO_LOTE`); nota **relativa ao conjunto** do lote, não porcentagem absoluta |
 | `.doc` não é mais aceito no upload | Sem servidor não há como abrir Word binário (formato OLE) no navegador. Uma textarea de colar texto cobre `.doc`, `.odt`, exportação do LinkedIn e qualquer outro formato — `.pdf` e `.docx` continuam indo por upload de arquivo |
 | A faixa da nota (`min`/`max`) saiu do schema Zod e foi para `validarNotas` | A saída estruturada da Claude não suporta essas restrições — ver "Armadilhas conhecidas" |
+| A lista espera o ranking: vaga e nota aparecem juntas | Era o contrário — a tabela vinha em ~2s e as notas caíam em cima dela depois. Lia como defeito: lista pronta, coluna Rank IA vazia, nada dizendo que ainda vinha coisa. O custo aceito é a espera subir para ~25s, e é por isso que a fase é **nomeada** ("Consultando a API de vagas..." → "Avaliando N vagas com a IA...") — espera longa e muda seria o mesmo problema por outro caminho. Quem decide é `faseDaBusca` em `src/fase.js` |
+| Quem espera é a tela, não o dado | O `banco` continua recebendo as vagas antes do ranking; só a tabela é que aguarda. É isso que mantém a degradação de graça: ranking que falha, que volta parcial, ou que nem roda por falta de currículo cai no `finally`, e a lista aparece com o que tiver. Uma lista que já custou uma das 200 requisições da JSearch nunca fica refém de uma chamada à Claude que deu errado |
 
 ---
 
@@ -241,6 +257,40 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 ---
 
 ## Armadilhas conhecidas
+
+- **`max_tokens` inclui o pensamento, e o modelo pensa sem você pedir.** Esta
+  é a que custou o Rank IA inteiro. O `claude-sonnet-5` roda thinking
+  *adaptive* por padrão — não existe parâmetro nenhum ligando isso no código,
+  então lendo só o código não dá para saber que existe. E o pensamento sai do
+  **mesmo** orçamento da resposta visível. Medido na resposta real de um lote
+  de 10 vagas: **1.476 tokens de pensamento** para 796 caracteres de JSON,
+  contra um `max_tokens` de 2.000. Cabia por 112 tokens numa chamada e não
+  cabia na seguinte — a saída vinha cortada no meio de uma string, o lote
+  morria inteiro e a tela mostrava "—". Hoje o teto é a constante `MAX_TOKENS`
+  (16.000) em `claude.js`, usada pelas três chamadas. Folga não custa: o teto
+  é limite, não reserva, e só se paga o que for gerado. Quem quiser regular o
+  custo do pensamento mexe em `output_config.effort`, não neste teto.
+
+- **O que você manda o modelo repetir de volta, você paga como saída.** O
+  `job_id` da JSearch é base64 de **402 caracteres**. O ranking pedia esse id
+  de volta para cada uma das 12 vagas do lote: ~1.930 tokens de saída só
+  ecoando identificador, contra os 2.000 de teto. Nem com o teto correto isso
+  se justificaria — é pagar preço de saída (US$ 10/1M) por lixo. Hoje o lote
+  manda um `ref` posicional (0, 1, 2) e traduz de volta para o id dentro de
+  `pontuarLote`; a saída encolheu **7×**. Se um dia o ref virar id de novo,
+  este é o defeito que volta.
+
+  > O `ref` é posicional **dentro do lote**, e a segunda volta remonta um lote
+  > só com quem faltou — lá o ref 0 já é outra vaga. A tradução tem que ficar
+  > dentro de `pontuarLote`, nunca acima dela.
+
+- **Mock de dado pequeno esconde defeito de tamanho.** Os dois defeitos acima
+  passaram por 120 testes verdes, revisão final e `npm run build`. Nenhum
+  podia pegá-los: todos os testes usavam id de dois caracteres (`a1`, `v10`),
+  e os dois defeitos só existem em função do tamanho real do dado. Quando o
+  valor de produção tem ordem de grandeza diferente da do mock — id, texto,
+  lote —, o teste com o valor pequeno não é evidência sobre o grande. O teste
+  novo em `ranking.test.js` usa um id de 402 caracteres justamente por isso.
 
 - **Um lote que falha não pode levar junto os que já foram pagos.** O
   `pontuarTodos` não tinha `try`/`catch` por lote: uma falha no segundo lote
@@ -310,7 +360,7 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 
 ```bash
 npm run dev        # a busca e a Avaliação IA só funcionam aqui — porta 5173, caminho /vagasatalhointeligenteparati/
-npm test           # vitest — 120 testes, 7 arquivos
+npm test           # vitest — 132 testes, 8 arquivos
 npm run lint       # oxlint (não pega no-undef hoje; veja a pendência 6)
 npm run build      # gera dist/
 npm run cidades    # regenera src/data/cidades.js a partir do IBGE
