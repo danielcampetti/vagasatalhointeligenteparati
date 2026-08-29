@@ -1099,7 +1099,16 @@ function Linha({ vaga, menuAberto, onMenu, onAbrir, onFavorito, onArquivar }) {
     'bg-transparent text-[#D3DAE6] hover:bg-white/[0.06]'
 
   return (
+    // A linha inteira abre o detalhe, como o card da Vaga Inteligente. Duas
+    // diferenças em relação a ele, e as duas vêm de a linha ter botões dentro:
+    //
+    // `div` e não `button`: um botão dentro de outro é HTML inválido e leitor
+    // de tela não sabe o que anunciar. E `div` com onClick não pega foco por
+    // teclado — por isso o `TituloDaVaga` continua sendo um botão de verdade,
+    // e não virou texto simples: ele é o caminho de teclado para a mesma ação.
+    // Mouse ganha a linha toda, teclado mantém o título.
     <div
+      onClick={onAbrir}
       className="hover:bg-[#0E1729]"
       style={{
         position: 'relative',
@@ -1110,6 +1119,7 @@ function Linha({ vaga, menuAberto, onMenu, onAbrir, onFavorito, onArquivar }) {
         padding: '15px 16px 15px 24px',
         borderBottom: '1px solid rgba(255,255,255,0.05)',
         transition: 'background .12s',
+        cursor: 'pointer',
       }}
     >
       <div
@@ -1252,6 +1262,12 @@ function Linha({ vaga, menuAberto, onMenu, onAbrir, onFavorito, onArquivar }) {
           justifyContent: 'flex-end',
         }}
       >
+        {/* Quem para a propagação é o handler lá no chamador (`onMenu`, que
+            já recebia o evento e o parava por causa do listener de documento
+            que fecha o menu). Isso agora guarda também contra o clique da
+            linha: em React, parar no filho impede o onClick do ancestral. Não
+            embrulhe aqui — `onMenu` chama `e.stopPropagation()` sem `?.`, e
+            invocá-lo sem evento lança. */}
         <button
           onClick={onMenu}
           className="bg-transparent text-[#7C8699] hover:bg-white/[0.06] hover:text-[#E8ECF4]"
@@ -1288,6 +1304,11 @@ function Linha({ vaga, menuAberto, onMenu, onAbrir, onFavorito, onArquivar }) {
               boxShadow: '0 16px 36px rgba(0,0,0,0.55)',
             }}
           >
+            {/* Os três já paravam a propagação no chamador, e é isso que os
+                guarda do clique da linha — "Arquivar" é o caso que dói: sem
+                essa parada ele removeria a vaga e abriria, no mesmo clique, o
+                detalhe de uma vaga que acabou de sair da lista. Mesma
+                advertência do botão acima: não embrulhar aqui. */}
             <button
               onClick={onAbrir}
               className={classeItemMenu}
@@ -1319,13 +1340,19 @@ function Linha({ vaga, menuAberto, onMenu, onAbrir, onFavorito, onArquivar }) {
 function Card({ vaga, onAbrir }) {
   const d = derivar(vaga)
   return (
+    // Mesmo tratamento da `Linha`, e pelo mesmo motivo: o card contém o
+    // `TituloDaVaga`, que é um botão, então envolvê-lo num `button` aninharia
+    // interativos. Aqui não há menu — o título é o único filho a se guardar, e
+    // ele já para a propagação por conta própria.
     <div
+      onClick={onAbrir}
       style={{
         padding: 16,
         borderBottom: '1px solid rgba(255,255,255,0.05)',
         display: 'flex',
         gap: 14,
         alignItems: 'flex-start',
+        cursor: 'pointer',
       }}
     >
       <div style={{ flex: 1, minWidth: 0 }}>
@@ -3064,8 +3091,11 @@ export default function App() {
                             e.stopPropagation()
                             setMenu((atual) => (atual === vaga.id ? null : vaga.id))
                           }}
-                          // Chega com evento pelo item do menu e sem evento
-                          // pelo título, que já parou a propagação por conta.
+                          // Chega por três caminhos: o clique na linha inteira,
+                          // o item "Ver detalhes" do menu, e o título — os
+                          // dois primeiros com evento, o título sem, porque
+                          // ele já parou a propagação por conta própria. Daí o
+                          // `?.`: sem ele o caminho do título lançaria.
                           onAbrir={(e) => {
                             e?.stopPropagation()
                             abrirVaga(vaga.id)
