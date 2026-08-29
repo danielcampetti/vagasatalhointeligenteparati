@@ -83,14 +83,18 @@ export function consultarCache(termo, cidade) {
  * foi servida do que já estava guardado. Consulta vazia não registra nada —
  * não haveria requisição a fazer.
  *
- * `vagas` só é passado nas buscas de rede que voltaram com resultado; é o que
- * o cache guarda para a próxima repetição não custar cota.
+ * O quarto argumento é um objeto (`{ vagas, cursor }`) e não a lista solta que
+ * era antes: com a paginação por cursor passaram a ser duas coisas a guardar,
+ * e dois parâmetros posicionais seguidos, ambos opcionais, seriam trocados um
+ * pelo outro na primeira chamada distraída. Só as buscas de rede que voltaram
+ * com resultado o passam — é o que o cache guarda para a próxima repetição não
+ * custar cota.
  */
 export function registrarUso(
   termo,
   cidade,
   origem,
-  vagas = null,
+  { vagas = null, cursor = null } = {},
   agora = new Date(),
 ) {
   const chave = chaveDaConsulta(termo, cidade)
@@ -101,7 +105,12 @@ export function registrarUso(
 
   let cache = cota.cache
   if (origem === 'rede' && Array.isArray(vagas)) {
-    cache = { ...cache, [chave]: { quando, vagas } }
+    // `cursor` é o ponto de continuação da paginação do `search-v2`, guardado
+    // ao lado das vagas porque pertence à mesma consulta: sem ele, repetir a
+    // busca devolveria tudo o que já foi carregado mas perderia o direito de
+    // pedir a próxima página, e o botão "Carregar mais" sumiria sem motivo
+    // visível. `null` aqui significa última página, e é diferente de ausente.
+    cache = { ...cache, [chave]: { quando, vagas, cursor } }
     // Descarta as entradas mais antigas quando passa do teto.
     const chaves = Object.keys(cache)
     if (chaves.length > TETO_CACHE) {

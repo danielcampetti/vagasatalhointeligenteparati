@@ -318,9 +318,14 @@ describe('ranquear', () => {
   // uniforme possível. A asserção é sobre o TAMANHO dos lotes — a contagem de
   // chamadas já é coberta pelo teste acima e não pegaria esta regressão
   // sozinha, porque tanto [12, 1] quanto [7, 6] somam 2 chamadas.
-  test('13 vagas: fatiamento equilibrado — nenhum lote fica com 1 vaga só, sem conjunto de comparação', async () => {
+  // Escrito em função de TAMANHO_LOTE, não de um número fixo: este teste já
+  // quebrou uma vez quando a constante subiu de 12 para 30, prendendo `[7, 6]`
+  // que só valia para 13 vagas contra lote de 12. O comportamento sob teste é
+  // o *equilíbrio* do corte, e ele não depende do valor da constante.
+  test('lista maior que o lote: fatiamento equilibrado — nenhum lote fica com 1 vaga só, sem conjunto de comparação', async () => {
     chamarEstruturado.mockClear()
-    const ids = Array.from({ length: 13 }, (_, i) => `v${i}`)
+    const quantas = TAMANHO_LOTE + 1 // força exatamente dois lotes
+    const ids = Array.from({ length: quantas }, (_, i) => `v${i}`)
     chamarEstruturado.mockResolvedValue({
       parsed_output: { notas: ids.map((_, ref) => ({ ref, nota: 50, motivo: 'x' })) },
     })
@@ -331,7 +336,11 @@ describe('ranquear', () => {
     const tamanhosDosLotes = chamarEstruturado.mock.calls.map(
       ([, params]) => loteDe(params).length,
     )
-    expect(tamanhosDosLotes).toEqual([7, 6])
+    // O corte ingênuo daria [TAMANHO_LOTE, 1]; o equilibrado divide ao meio.
+    expect(tamanhosDosLotes).toEqual([
+      Math.ceil(quantas / 2),
+      Math.floor(quantas / 2),
+    ])
     expect(tamanhosDosLotes.every((n) => n > 1)).toBe(true)
   })
 
@@ -380,13 +389,17 @@ describe('ranquear', () => {
   // já cobradas — morriam sem chegar à tela.
   test('lote que lança no meio não apaga as notas dos lotes já pagos antes dele', async () => {
     chamarEstruturado.mockClear()
-    const ids = Array.from({ length: 13 }, (_, i) => `v${i}`) // fatia em [7, 6]
+    // Também em função da constante, pelo mesmo motivo do teste acima.
+    const quantas = TAMANHO_LOTE + 1
+    const noPrimeiroLote = Math.ceil(quantas / 2)
+    const ids = Array.from({ length: quantas }, (_, i) => `v${i}`)
+    // A última vaga cai sempre no segundo lote, seja qual for TAMANHO_LOTE.
+    const condenada = `v${quantas - 1}`
     chamarEstruturado.mockImplementation(async (_tipo, params) => {
       const lote = loteDe(params)
-      // O lote que contém v10 (o segundo, [7,6] = v7..v12) sempre lança —
-      // simula o teto de custo estourando e continuando estourado numa
-      // eventual segunda volta.
-      if (lote.includes('v10')) {
+      // O lote que contém a vaga condenada sempre lança — simula o teto de
+      // custo estourando e continuando estourado numa eventual segunda volta.
+      if (lote.includes(condenada)) {
         throw new Error('Teto de custo atingido')
       }
       return {
@@ -399,12 +412,12 @@ describe('ranquear', () => {
     const vagas = ids.map((id) => vaga(id))
     const resultado = await ranquear({ cargo: 'x' }, 'instrução', vagas)
 
-    // As 7 vagas do primeiro lote já foram cobradas e pontuadas — não podem
+    // As vagas do primeiro lote já foram cobradas e pontuadas — não podem
     // sumir só porque o segundo lote lançou.
-    expect(resultado.filter((v) => v.rank === 90)).toHaveLength(7)
+    expect(resultado.filter((v) => v.rank === 90)).toHaveLength(noPrimeiroLote)
     // O lote que lançou fica sem nota — degrada, não derruba a lista inteira.
-    expect(resultado).toHaveLength(13)
-    expect(resultado.find((v) => v.id === 'v10').rank).toBe(null)
+    expect(resultado).toHaveLength(quantas)
+    expect(resultado.find((v) => v.id === condenada).rank).toBe(null)
   })
 })
 

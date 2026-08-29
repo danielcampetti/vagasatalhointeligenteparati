@@ -11,12 +11,19 @@ import {
   zerarContagem,
 } from './cota'
 import { mensagemDoErro, TIPOS } from './api/claude'
-import { ErroJSearch, buscarVagas, montarConsulta, vagasDaResposta } from './api/jsearch'
+import {
+  ErroJSearch,
+  buscarVagas,
+  cursorDaResposta,
+  montarConsulta,
+  vagasDaResposta,
+} from './api/jsearch'
 import { justificar } from './api/justificativa'
 import { mapearVagas } from './api/mapear'
 import { ranquear } from './api/ranking'
 import { definirInstrucao, lerCurriculo, perfilEfetivo } from './curriculo'
 import { dolares, lerCusto, zerarCusto } from './custo'
+import { acharVaga } from './detalhe'
 import { faseDaBusca } from './fase'
 import CampoCidade from './paineis/CampoCidade'
 import { AvisoErro, Carregando } from './paineis/comuns'
@@ -2504,6 +2511,17 @@ export default function App() {
   // `ranqueando` também tranca uma nova busca enquanto ele está no ar: sem
   // isso, um `setBanco` do ranking anterior poderia chegar depois do banco de
   // uma busca mais nova e sobrescrevê-la.
+  /**
+   * O ponto de continuação da paginação, ou `null` quando não há próxima
+   * página. Só a aba Vagas pagina; a Vaga Inteligente entrega o recorte que a
+   * IA escolheu e não tem "carregar mais".
+   *
+   * Vive no estado e no cache: no estado para o botão saber se aparece, no
+   * cache para sobreviver a uma busca repetida (ver `cota.js`).
+   */
+  const [cursor, setCursor] = useState(null)
+  const [carregandoMais, setCarregandoMais] = useState(false)
+
   const [ranqueando, setRanqueando] = useState(false)
   const [erroRanking, setErroRanking] = useState(null)
 
@@ -2689,10 +2707,16 @@ export default function App() {
     setErroBusca(null)
     setErroRanking(null)
     setPagina(1)
+    // Consulta nova, paginação do zero: o cursor da anterior aponta para
+    // dentro de outra busca e pediria a página seguinte da lista errada.
+    setCursor(null)
 
     const guardado = consultarCache(termo, cidadeAlvo)
     if (guardado) {
       setBanco(guardado.vagas)
+      // Sem restaurar o cursor, repetir a busca traria as vagas de volta e o
+      // botão de carregar mais sumiria — como se a consulta tivesse acabado.
+      setCursor(guardado.cursor ?? null)
       setCota(registrarUso(termo, cidadeAlvo, 'cache'))
       setConsultaFeita(true)
       await ranquearBanco(guardado.vagas)
@@ -2704,8 +2728,10 @@ export default function App() {
     try {
       const resposta = await buscarVagas(montarConsulta(termo, cidadeAlvo))
       const vagas = mapearVagas(vagasDaResposta(resposta))
+      const proximo = cursorDaResposta(resposta)
       setBanco(vagas)
-      setCota(registrarUso(termo, cidadeAlvo, 'rede', vagas))
+      setCursor(proximo)
+      setCota(registrarUso(termo, cidadeAlvo, 'rede', { vagas, cursor: proximo }))
       setConsultaFeita(true)
       vagasEncontradas = vagas
     } catch (err) {
@@ -2728,6 +2754,74 @@ export default function App() {
     // ranking, se rodar, só repõe o banco quando terminar.
     if (vagasEncontradas) {
       await ranquearBanco(vagasEncontradas)
+    }
+  }
+
+  /**
+   * Traz a próxima página da JSearch e a **acrescenta** à lista, sem trocar o
+   * que já está na tela. O cursor do `search-v2` só anda para frente: não há
+   * "página anterior" a pedir, e é por isso que a tela acumula em vez de
+   * paginar contra a API.
+   *
+   * Custa 1 das 200 requisições do mês e 1 chamada à Claude — e essa chamada
+   * reranqueia a lista **inteira**, não só as vagas novas. É deliberado, e foi
+   * medido: as mesmas 10 vagas num lote só e partidas em dois de 5 deram
+   * diferença média de 9,1 pontos, máxima de 14, e o primeiro lugar trocou.
+   * Como a tabela ordena por Rank IA, notas de lotes diferentes na mesma
+   * coluna ordenam errado. Reranquear junto custa quase o mesmo, porque
+   * continua sendo uma chamada só enquanto a lista couber em TAMANHO_LOTE.
+   */
+  async function carregarMais() {
+    // `cursor` nulo é a última página. O botão nem aparece nesse caso; a
+    // guarda existe para o clique que escapa entre o estado e o render.
+    if (buscando || ranqueando || carregandoMais || !cursor) return
+
+    const termo = cargo.trim()
+    const cidadeAlvo = cidade.trim()
+
+    setErroBusca(null)
+    setErroRanking(null)
+    setCarregandoMais(true)
+
+    let listaCompleta = null
+    try {
+      const resposta = await buscarVagas(
+        montarConsulta(termo, cidadeAlvo),
+        cursor,
+      )
+      const novas = mapearVagas(vagasDaResposta(resposta))
+      const proximo = cursorDaResposta(resposta)
+
+      // Mescla por id: a mesma vaga pode voltar em duas páginas, e duas
+      // linhas idênticas na tabela seriam pior que uma vaga a menos.
+      const jaTem = new Set(banco.map((v) => v.id))
+      listaCompleta = [...banco, ...novas.filter((v) => !jaTem.has(v.id))]
+
+      setBanco(listaCompleta)
+      setCursor(proximo)
+      setCota(
+        registrarUso(termo, cidadeAlvo, 'rede', {
+          vagas: listaCompleta,
+          cursor: proximo,
+        }),
+      )
+    } catch (err) {
+      const erro =
+        err instanceof ErroJSearch
+          ? err
+          : new ErroJSearch(`Erro inesperado: ${err.message}`)
+      setErroBusca(erro.message)
+      // A lista que já estava na tela fica: ela custou requisições anteriores,
+      // e o erro é da página nova, não dela.
+      if (erro.tocouApi) {
+        setCota(registrarUso(termo, cidadeAlvo, 'rede'))
+      }
+    } finally {
+      setCarregandoMais(false)
+    }
+
+    if (listaCompleta) {
+      await ranquearBanco(listaCompleta)
     }
   }
 
@@ -2864,7 +2958,15 @@ export default function App() {
       const resposta = await buscarVagas(montarConsulta(termo, cidadeAlvo))
       const vagas = mapearVagas(vagasDaResposta(resposta))
       setVagasIa(vagas)
-      setCota(registrarUso(termo, cidadeAlvo, 'rede', vagas))
+      // Grava o cursor mesmo sem paginar aqui: as duas abas dividem a mesma
+      // chave de cache (termo|cidade), e uma entrada gravada sem ele faria o
+      // "Carregar mais" da aba Vagas sumir depois de uma busca inteligente.
+      setCota(
+        registrarUso(termo, cidadeAlvo, 'rede', {
+          vagas,
+          cursor: cursorDaResposta(resposta),
+        }),
+      )
       setBuscaIaFeita(true)
       vagasEncontradas = vagas
     } catch (err) {
@@ -3142,6 +3244,57 @@ export default function App() {
                     }}
                   />
                 </div>
+
+                {/* Só na aba Vagas, e só enquanto houver próxima página. Sem
+                    cursor o botão desaparece em vez de ficar clicável e
+                    inerte: "acabaram as vagas" é informação, botão morto não.
+                    O custo vai escrito no próprio botão — ele gasta a cota
+                    escassa, e nenhum clique aqui deve ser surpresa. */}
+                {aba === 'vagas' && cursor && (
+                  <div
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      gap: 7,
+                      marginTop: 18,
+                    }}
+                  >
+                    <button
+                      onClick={carregarMais}
+                      disabled={carregandoMais || ranqueando || buscando}
+                      className={
+                        carregandoMais || ranqueando || buscando
+                          ? 'bg-[#1A2438] text-[#7C8699]'
+                          : 'bg-white/[0.05] text-[#D3DAE6] hover:bg-white/[0.09] hover:text-[#E8ECF4]'
+                      }
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 9,
+                        padding: '11px 20px',
+                        borderRadius: 10,
+                        border: '1px solid rgba(255,255,255,0.1)',
+                        fontSize: 13.5,
+                        fontWeight: 600,
+                        cursor:
+                          carregandoMais || ranqueando || buscando
+                            ? 'default'
+                            : 'pointer',
+                      }}
+                    >
+                      {carregandoMais
+                        ? 'Buscando mais vagas...'
+                        : ranqueando
+                          ? 'Avaliando com a IA...'
+                          : 'Carregar mais vagas'}
+                    </button>
+                    <div style={{ fontSize: 12, color: '#7C8699' }}>
+                      Consome 1 das 200 requisições do mês e reavalia a lista
+                      inteira com a IA (~US$ 0,03).
+                    </div>
+                  </div>
+                )}
               </>
             )}
           </div>

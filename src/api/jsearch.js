@@ -41,9 +41,36 @@ const MENSAGENS = {
   429: 'Limite atingido (429). O plano gratuito são 200 requisições por mês — use o cache ou espere a renovação.',
 }
 
-export function montarUrl(consulta) {
+/**
+ * `cursor` é como o `search-v2` pagina: cada resposta traz o cursor da página
+ * seguinte, e devolvê-lo pede a próxima. Não existe "cursor anterior" — a
+ * navegação só anda para frente, e é por isso que a tela acumula resultados
+ * ("Carregar mais") em vez de trocar de página.
+ *
+ * Cursor vazio não vira parâmetro: `cursor=` seria pedir a próxima página de
+ * nada, e uma requisição malformada debita uma das 200 do mês igual.
+ */
+export function montarUrl(consulta, cursor = null) {
   const params = new URLSearchParams({ query: consulta, ...PARAMS_FIXOS })
+  if (cursor) params.set('cursor', cursor)
   return `${ENDPOINT}?${params.toString()}`
+}
+
+/**
+ * O cursor da próxima página, ou `null` quando não há mais.
+ *
+ * Aceita o campo no topo e dentro de `data`. A documentação nomeia o campo
+ * (`cursor`) mas não fixa onde ele mora, e esta API já obriga `vagasDaResposta`
+ * a aceitar `data: []` e `data: { jobs: [] }` — variar de nível é plausível
+ * pelo mesmo motivo. Aceitar os dois custa uma linha; errar o lugar custaria
+ * uma paginação que nunca avança, sem erro nenhum na tela.
+ *
+ * `null` é a resposta certa também para lixo: sem cursor, a tela some com o
+ * botão de carregar mais, que é o comportamento seguro.
+ */
+export function cursorDaResposta(bruto) {
+  const achado = bruto?.cursor ?? bruto?.data?.cursor
+  return typeof achado === 'string' && achado ? achado : null
 }
 
 /** "Técnico de TI" + "Caxias do Sul, RS" -> "Técnico de TI em Caxias do Sul, RS" */
@@ -62,8 +89,8 @@ export function vagasDaResposta(bruto) {
   return Array.isArray(lista) ? lista : []
 }
 
-export async function buscarVagas(consulta) {
-  const url = montarUrl(consulta)
+export async function buscarVagas(consulta, cursor = null) {
+  const url = montarUrl(consulta, cursor)
 
   let res
   try {

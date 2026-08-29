@@ -32,7 +32,25 @@ import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import { z } from 'zod'
 import { MAX_TOKENS, TIPOS, chamarEstruturado } from './claude'
 
-export const TAMANHO_LOTE = 12
+/**
+ * Por que 30 e não 12: com a paginação ("Carregar mais"), a lista passa a
+ * crescer, e um lote menor que ela a partiria em pedaços com escalas
+ * independentes. Isso foi **medido**, não suposto — as mesmas 10 vagas, num
+ * lote só e partidas em dois de 5: diferença média de 9,1 pontos, máxima de
+ * 14, e o primeiro lugar trocou. O lote fraco sobe em bloco (as 5 do segundo
+ * lote subiram todas, +6 a +10), porque avaliado só contra si mesmo ele é
+ * graduado na curva.
+ *
+ * O teto não é arbitrário: o lote de 10 medido gastou 3.421 tokens de saída
+ * (2.980 de pensamento) contra os 16.000 de `MAX_TOKENS`, e a nota de desenho
+ * acima diz que a qualidade cai por volta de 50 vagas. 30 fica confortável nos
+ * dois limites.
+ *
+ * Acima de 30 o fatiamento volta, e com ele a mistura de escalas — o
+ * `emLotes` segue existindo para esse caso, e a advertência do cabeçalho
+ * continua valendo.
+ */
+export const TAMANHO_LOTE = 30
 
 /**
  * Sem `min`/`max` em número e sem `max` em string, de propósito — mas **com**
