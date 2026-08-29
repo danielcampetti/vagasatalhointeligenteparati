@@ -26,11 +26,18 @@ que passou a esperar o ranking, o detalhe que abre também da Vaga Inteligente,
 a linha clicável da tabela, o "Carregar mais vagas", e este documento.
 
 **Nada disso está no remoto, e este é o risco mais fácil de eliminar aqui.** O
-`main` local está **57 commits à frente do `origin/main`**
-(`git rev-list --count origin/main..main` — número com o comando ao lado, para
-não envelhecer calado). O que está publicado no GitHub é anterior até à
-integração da busca real da JSearch: o site de lá não conhece nem a busca, nem
-a Avaliação IA, nem nada de 28/08.
+`main` local está dezenas de commits à frente do `origin/main` — para o número
+de agora, `git rev-list --count origin/main..main`.
+
+> O número não está escrito aqui de propósito. Ele já ficou errado **três
+> vezes** neste documento, e a causa é sempre a mesma: um contador que muda a
+> cada commit, escrito à mão, envelhece antes de o commit que o escreveu
+> terminar — inclusive o commit que corrige o número anterior. O comando não
+> envelhece.
+
+O que está publicado no GitHub é anterior até à integração da busca real da
+JSearch: o site de lá não conhece nem a busca, nem a Avaliação IA, nem nada de
+28/08.
 
 **Passou por revisão final**, escopada ao que nunca tinha tido gate próprio: o
 `ranking.js`, a `justificativa.js` e a camada de tela toda. Ela achou três
