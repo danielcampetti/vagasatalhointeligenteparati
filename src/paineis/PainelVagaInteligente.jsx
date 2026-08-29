@@ -33,6 +33,7 @@ export default function PainelVagaInteligente({
   vagas,
   erro,
   onBuscar,
+  onAbrirVaga,
   onIrParaCurriculo,
 }) {
   // A mesma espera da aba Vagas, pelo mesmo motivo — ver `fase.js`. Aqui não
@@ -258,7 +259,7 @@ export default function PainelVagaInteligente({
         {fase ? (
           <Carregando texto={fase.texto} detalhe={fase.detalhe} />
         ) : buscaFeita ? (
-          <ResultadoInteligente vagas={vagas} />
+          <ResultadoInteligente vagas={vagas} onAbrirVaga={onAbrirVaga} />
         ) : (
           !erro && (
             <div
@@ -306,7 +307,7 @@ export default function PainelVagaInteligente({
  * de ordenação, paginação, menu por linha e favoritos, estado que esta aba não
  * tem. Reaproveitá-la exigiria arrastar tudo isso junto para cá.
  */
-function ResultadoInteligente({ vagas }) {
+function ResultadoInteligente({ vagas, onAbrirVaga }) {
   if (!vagas.length) {
     // Busca rodou e não achou nada. Não é erro, e não deve parecer erro: o
     // aluno precisa saber que a consulta funcionou e o mercado é que está vazio.
@@ -351,16 +352,32 @@ function ResultadoInteligente({ vagas }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
       {ordenadas.map((vaga) => (
-        <div
+        // `button`, não `div` com onClick: foco por teclado e Enter/Espaço vêm
+        // de graça, e leitor de tela anuncia como algo acionável. O card
+        // inteiro é o alvo porque não há mais nada clicável dentro dele — a
+        // tabela da aba Vagas limita ao título só porque a linha de lá também
+        // tem menu, favorito e arquivar disputando o clique.
+        //
+        // `background` fica no className e não no style: o inline venceria a
+        // regra de hover. Mesmo motivo do `Linha` no App.jsx.
+        <button
           key={vaga.id}
+          onClick={() => onAbrirVaga(vaga.id)}
+          title="Ver os detalhes desta vaga"
+          className="bg-[#0E1626] hover:bg-[#141F36]"
           style={{
             display: 'flex',
             alignItems: 'center',
             gap: 14,
+            width: '100%',
             border: '1px solid rgba(255,255,255,0.06)',
-            background: '#0E1626',
             borderRadius: 10,
             padding: '12px 14px',
+            font: 'inherit',
+            color: 'inherit',
+            textAlign: 'left',
+            cursor: 'pointer',
+            transition: 'background .12s',
           }}
         >
           <div style={{ flex: 1, minWidth: 0 }}>
@@ -393,7 +410,7 @@ function ResultadoInteligente({ vagas }) {
               {vaga.rank === null ? '—' : vaga.rank}
             </div>
           </div>
-        </div>
+        </button>
       ))}
     </div>
   )

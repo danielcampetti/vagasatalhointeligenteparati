@@ -1812,6 +1812,27 @@ function ModalNovaVaga({ form, onCampo, onFechar, onSalvar }) {
  * chega primeiro ao que já sabemos da vaga, e sai para o anúncio original se
  * quiser mesmo se candidatar.
  */
+/**
+ * A seta de "sai do app". Extraída porque o link externo passou a existir em
+ * dois lugares da mesma página — topo e rodapé — e duas cópias do mesmo SVG
+ * divergem na primeira vez que alguém ajusta só uma delas.
+ */
+function IconeExterno() {
+  return (
+    <svg
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.2"
+    >
+      <path d="M14 4h6v6M20 4l-8.5 8.5" />
+      <path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
+    </svg>
+  )
+}
+
 function PaginaVaga({ vaga, onVoltar, cv, instrucao, onCusto, ranqueando }) {
   const d = derivar(vaga)
 
@@ -1871,32 +1892,81 @@ function PaginaVaga({ vaga, onVoltar, cv, instrucao, onCusto, ranqueando }) {
         maxWidth: 880,
       }}
     >
-      <button
-        onClick={onVoltar}
-        className="bg-transparent text-[#9AA5B8] hover:text-[#E8ECF4]"
+      {/* Barra de ações do topo. O "Voltar" era texto solto em cinza fraco
+          (#9AA5B8, sem borda nem fundo) e desaparecia contra o cartão; virou
+          botão fantasma. O link externo estava só no rodapé, depois de uma
+          descrição que passa de mil pixels — subiu para cá **sem sair de lá**:
+          quem só quer se candidatar acha no topo, quem lê tudo se candidata
+          onde terminou de ler.
+
+          O mesmo rótulo nos dois lugares, de propósito. É a mesma ação, e uma
+          ação que troca de nome no meio do fluxo obriga a reaprender a tela; a
+          diferença entre eles é de peso visual, não de vocabulário. */}
+      <div
         style={{
-          alignSelf: 'flex-start',
           display: 'flex',
           alignItems: 'center',
-          gap: 7,
-          padding: '6px 2px',
-          border: 'none',
-          fontSize: 13.5,
-          cursor: 'pointer',
+          justifyContent: 'space-between',
+          gap: 12,
+          // Em tela estreita os dois empilham em vez de espremer o rótulo.
+          flexWrap: 'wrap',
         }}
       >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
+        <button
+          onClick={onVoltar}
+          className="bg-white/[0.04] text-[#D3DAE6] hover:bg-white/[0.08] hover:text-[#E8ECF4]"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 7,
+            padding: '9px 14px',
+            borderRadius: 9,
+            border: '1px solid rgba(255,255,255,0.09)',
+            fontSize: 13.5,
+            cursor: 'pointer',
+          }}
         >
-          <path d="M15 5l-7 7 7 7" />
-        </svg>
-        Voltar aos resultados
-      </button>
+          <svg
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
+            <path d="M15 5l-7 7 7 7" />
+          </svg>
+          Voltar aos resultados
+        </button>
+
+        {/* Sem link não há botão nenhum aqui — um botão morto no topo seria
+            pior que a ausência. O rodapé explica o porquê da falta. */}
+        {vaga.link && (
+          <a
+            href={vaga.link}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="bg-[#2563EB] hover:bg-[#1D4FD8]"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 8,
+              // Menor que o do rodapé (12px/22px, fonte 14): ali ele é o
+              // fecho da leitura e pode pesar; aqui divide um cabeçalho com o
+              // Voltar, e dois botões cheios brigariam entre si.
+              padding: '9px 16px',
+              borderRadius: 9,
+              color: '#fff',
+              fontSize: 13.5,
+              fontWeight: 600,
+              textDecoration: 'none',
+            }}
+          >
+            Ver vaga no site original
+            <IconeExterno />
+          </a>
+        )}
+      </div>
 
       <div style={cartao}>
         <h2
@@ -2083,17 +2153,7 @@ function PaginaVaga({ vaga, onVoltar, cv, instrucao, onCusto, ranqueando }) {
           }}
         >
           Ver vaga no site original
-          <svg
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2.2"
-          >
-            <path d="M14 4h6v6M20 4l-8.5 8.5" />
-            <path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5" />
-          </svg>
+          <IconeExterno />
         </a>
       ) : (
         <div style={{ fontSize: 13, color: '#7C8699' }}>
@@ -2501,9 +2561,25 @@ export default function App() {
     return () => window.removeEventListener('popstate', aoVoltar)
   }, [])
 
+  /**
+   * Abre o detalhe de uma vaga, venha ela da tabela ou da Vaga Inteligente.
+   *
+   * O `alterarVaga` marca `seen` no **banco**, e só nele. Uma vaga que exista
+   * apenas em `vagasIa` passa por aqui sem ser marcada — de propósito, não por
+   * esquecimento: `seen` é o pontinho azul da tabela, e a lista da Vaga
+   * Inteligente não tem essa coluna nem esse conceito. Se um dia ela ganhar um
+   * indicador de visto, é aqui que falta o `setVagasIa` correspondente; hoje
+   * ele seria estado que ninguém lê.
+   */
   function abrirVaga(id) {
     alterarVaga(id, (x) => ({ ...x, seen: true }))
     setVagaAberta(id)
+    // A página de detalhe entra no lugar da lista, mas a rolagem da janela é a
+    // mesma: clicar numa vaga do fim de uma lista de dez abria o detalhe já no
+    // meio da descrição, com o cabeçalho — título, Rank IA, Voltar e o link
+    // externo — fora da tela. Medido: `scrollY` 619 ao abrir a última vaga.
+    // Sem isto, destacar os botões do topo não adianta: eles abrem escondidos.
+    window.scrollTo(0, 0)
     window.history.pushState({ vaga: id }, '')
   }
 
@@ -2531,11 +2607,18 @@ export default function App() {
 
   const ehTabela = aba === 'vagas' || aba === 'banco'
 
+  // As três abas de onde se abre uma vaga. A Vaga Inteligente entrou depois
+  // das outras duas, e a distinção importa: `ehTabela` é sobre *renderizar uma
+  // tabela*, esta é sobre *poder abrir o detalhe* — a Vaga Inteligente abre o
+  // detalhe sem ter tabela nenhuma. Juntar as duas ideias numa constante só
+  // faria a Vaga Inteligente herdar o bloco de listagem da tabela.
+  const abreDetalhe = ehTabela || aba === 'inteligente'
+
   // A vaga aberta pode ter sido arquivada enquanto a página estava no ar;
-  // buscar pelo id a cada render evita mostrar um registro que já saiu.
-  const detalhe = vagaAberta
-    ? (banco.find((v) => v.id === vagaAberta) ?? null)
-    : null
+  // buscar pelo id a cada render evita mostrar um registro que já saiu. A
+  // busca olha as duas listas — banco e Vaga Inteligente — e a ordem entre
+  // elas está explicada em `detalhe.js`.
+  const detalhe = acharVaga(vagaAberta, banco, vagasIa)
 
   // Na aba Vagas nada aparece até se buscar. A aba Banco de Dados mostra o
   // acervo sempre.
@@ -2782,6 +2865,20 @@ export default function App() {
   }
 
   function irParaAba(nova) {
+    // Trocar de aba fecha a página de detalhe. Sem isto ela sobrevive à troca
+    // e aparece sob o cabeçalho de outra aba — uma vaga da Vaga Inteligente
+    // debaixo de "Histórico completo de vagas coletadas", onde ela não está.
+    //
+    // Já era assim entre Vagas e Banco de Dados, onde passava despercebido
+    // porque as duas mostram o mesmo `banco`; quando o detalhe passou a abrir
+    // também da Vaga Inteligente, cuja lista é separada, virou visível.
+    //
+    // `fecharVaga()` e não `setVagaAberta(null)`: abrir empurrou uma entrada
+    // no histórico, e limpar só o estado a deixaria órfã — o voltar do
+    // navegador não faria nada visível. Condicionado a `vagaAberta` porque
+    // sem detalhe aberto não há entrada para desfazer, e o `back()` sairia
+    // do app.
+    if (vagaAberta) fecharVaga()
     setAba(nova)
     setPagina(1)
     // Limpa só a consulta da aba Vagas. A cidade da Vaga Inteligente fica:
@@ -2873,14 +2970,18 @@ export default function App() {
 
         {/* A página de detalhe ocupa o lugar da tabela e do bloco de consulta:
             é uma tela, não um painel dentro da listagem. */}
-        {ehTabela && detalhe && (
+        {abreDetalhe && detalhe && (
           <PaginaVaga
             vaga={detalhe}
             onVoltar={fecharVaga}
             cv={cv}
             instrucao={instrucao}
             onCusto={() => setCusto(lerCusto())}
-            ranqueando={ranqueando}
+            // Cada aba tem o seu estado de ranking, e a página aberta a
+            // partir da Vaga Inteligente tem que olhar o dela — passar só
+            // `ranqueando` faria o rótulo do Rank IA ler o estado da aba
+            // errada.
+            ranqueando={aba === 'inteligente' ? ranqueandoIa : ranqueando}
           />
         )}
 
@@ -3044,7 +3145,11 @@ export default function App() {
           />
         )}
 
-        {aba === 'inteligente' && (
+        {/* `!detalhe` pelo mesmo motivo da tabela acima: a página de detalhe
+            é uma tela, não um painel dentro da listagem. Sem isto o painel
+            inteiro — currículo, cidade, botão de busca — ficaria empilhado
+            embaixo do detalhe da vaga. */}
+        {aba === 'inteligente' && !detalhe && (
           <PainelVagaInteligente
             cv={cv}
             cidade={cidadeIa}
@@ -3058,6 +3163,7 @@ export default function App() {
             vagas={vagasIa}
             erro={erroIa}
             onBuscar={buscarInteligente}
+            onAbrirVaga={abrirVaga}
             onIrParaCurriculo={() => irParaAba('ia')}
           />
         )}
