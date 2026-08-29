@@ -13,19 +13,24 @@ funcionam*; este arquivo diz *em que pé estão* e *o que fazer a seguir*.
 
 ## Estado do repositório
 
-Tudo commitado, `git status` limpo. A branch `avaliacao-ia` está **55 commits
-à frente do `main`** (`git rev-list --count main..avaliacao-ia` — a contagem
-anterior deste documento não batia com nenhuma medida, por isso agora vem com o
-comando ao lado). Desses, os 29 do meio são a Avaliação IA inteira — do desenho
-ao medidor de custo, passando pela revisão final e pela onda de correções que
-ela gerou — e os 7 do topo são o trabalho de 28/08: a correção do Rank IA, a
-lista que passou a esperar o ranking, o detalhe que abre também da Vaga
-Inteligente, a linha clicável da tabela, o "Carregar mais vagas", e este
-documento.
+Tudo commitado, `git status` limpo. **A `avaliacao-ia` foi integrada ao
+`main` em 28/08**, por fast-forward — ela não era um desvio lateral, era a
+linha principal do trabalho, e o histórico já estava commit a commit. As duas
+referências apontam para o mesmo commit desde então; a de trabalho daqui para
+frente é o `main`.
 
-**Nada disso está no remoto.** O `main` local está 2 commits à frente do
-`origin/main`, e a `avaliacao-ia` nunca foi publicada — o que está no GitHub
-é anterior até à busca real da JSearch.
+Dos commits do `main`, os 29 do meio são a Avaliação IA inteira — do desenho ao
+medidor de custo, passando pela revisão final e pela onda de correções que ela
+gerou — e os 7 do topo são o trabalho de 28/08: a correção do Rank IA, a lista
+que passou a esperar o ranking, o detalhe que abre também da Vaga Inteligente,
+a linha clicável da tabela, o "Carregar mais vagas", e este documento.
+
+**Nada disso está no remoto, e este é o risco mais fácil de eliminar aqui.** O
+`main` local está **57 commits à frente do `origin/main`**
+(`git rev-list --count origin/main..main` — número com o comando ao lado, para
+não envelhecer calado). O que está publicado no GitHub é anterior até à
+integração da busca real da JSearch: o site de lá não conhece nem a busca, nem
+a Avaliação IA, nem nada de 28/08.
 
 **Passou por revisão final**, escopada ao que nunca tinha tido gate próprio: o
 `ranking.js`, a `justificativa.js` e a camada de tela toda. Ela achou três
