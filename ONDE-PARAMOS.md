@@ -25,9 +25,14 @@ gerou — e os 7 do topo são o trabalho de 28/08: a correção do Rank IA, a li
 que passou a esperar o ranking, o detalhe que abre também da Vaga Inteligente,
 a linha clicável da tabela, o "Carregar mais vagas", e este documento.
 
-**Nada disso está no remoto, e este é o risco mais fácil de eliminar aqui.** O
-`main` local está dezenas de commits à frente do `origin/main` — para o número
-de agora, `git rev-list --count origin/main..main`.
+**Nada disso está no remoto — e isso é decisão, não esquecimento.** Em 28/08
+ficou combinado manter o trabalho só nesta máquina por enquanto; não publique
+sem pedir. O `main` local está dezenas de commits à frente do `origin/main` —
+para o número de agora, `git rev-list --count origin/main..main`.
+
+O risco continua existindo e vale reavaliar de vez em quando: dias de trabalho
+sem cópia fora daqui. Mas quem decide quando publicar é o dono do repositório,
+e a resposta atual é "ainda não".
 
 > O número não está escrito aqui de propósito. Ele já ficou errado **três
 > vezes** neste documento, e a causa é sempre a mesma: um contador que muda a
@@ -229,6 +234,7 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 | Ranking em lote (perfil + N vagas, uma chamada) | Decisão antiga (era a pendência 3), agora implementada em `ranking.js`: currículo viaja uma vez, a saída cara encolhe para `{id, nota, motivo}`. Lote de 12 (`TAMANHO_LOTE`); nota **relativa ao conjunto** do lote, não porcentagem absoluta |
 | `.doc` não é mais aceito no upload | Sem servidor não há como abrir Word binário (formato OLE) no navegador. Uma textarea de colar texto cobre `.doc`, `.odt`, exportação do LinkedIn e qualquer outro formato — `.pdf` e `.docx` continuam indo por upload de arquivo |
 | `TAMANHO_LOTE` é 30, e "Carregar mais" reranqueia tudo | Lote menor que a lista a partiria em escalas independentes — medido: 9,1 pontos de diferença média e troca de primeiro lugar. Reranquear junto custa quase o mesmo (continua uma chamada) e devolve uma coluna Rank IA que de fato ordena |
+| O trabalho fica só na máquina local, sem push | Decidido em 28/08. O `origin/main` segue anterior à busca real da JSearch, e publicar é escolha do dono do repositório — não faça por iniciativa própria ao ler o aviso de risco acima |
 | A tela acumula resultados em vez de paginar contra a API | O cursor do `search-v2` só anda para frente: não existe "cursor anterior" para pedir. Uma paginação real exigiria guardar cada página para poder voltar; acumular resolve o mesmo problema sem esse estado |
 | A faixa da nota (`min`/`max`) saiu do schema Zod e foi para `validarNotas` | A saída estruturada da Claude não suporta essas restrições — ver "Armadilhas conhecidas" |
 | A lista espera o ranking: vaga e nota aparecem juntas | Era o contrário — a tabela vinha em ~2s e as notas caíam em cima dela depois. Lia como defeito: lista pronta, coluna Rank IA vazia, nada dizendo que ainda vinha coisa. O custo aceito é a espera subir para ~25s, e é por isso que a fase é **nomeada** ("Consultando a API de vagas..." → "Avaliando N vagas com a IA...") — espera longa e muda seria o mesmo problema por outro caminho. Quem decide é `faseDaBusca` em `src/fase.js` |
