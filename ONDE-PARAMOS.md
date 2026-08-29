@@ -13,13 +13,15 @@ funcionam*; este arquivo diz *em que pé estão* e *o que fazer a seguir*.
 
 ## Estado do repositório
 
-Tudo commitado, `git status` limpo. A branch `avaliacao-ia` está **51 commits
+Tudo commitado, `git status` limpo. A branch `avaliacao-ia` está **55 commits
 à frente do `main`** (`git rev-list --count main..avaliacao-ia` — a contagem
 anterior deste documento não batia com nenhuma medida, por isso agora vem com o
 comando ao lado). Desses, os 29 do meio são a Avaliação IA inteira — do desenho
 ao medidor de custo, passando pela revisão final e pela onda de correções que
-ela gerou — e os 3 do topo são o trabalho de 28/08: a correção do Rank IA, a
-lista que passou a esperar o ranking, e este documento.
+ela gerou — e os 7 do topo são o trabalho de 28/08: a correção do Rank IA, a
+lista que passou a esperar o ranking, o detalhe que abre também da Vaga
+Inteligente, a linha clicável da tabela, o "Carregar mais vagas", e este
+documento.
 
 **Nada disso está no remoto.** O `main` local está 2 commits à frente do
 `origin/main`, e a `avaliacao-ia` nunca foi publicada — o que está no GitHub
@@ -54,7 +56,7 @@ caminho: o `base` do Vite aponta para o nome do repositório, então a raiz
 npm test
 ```
 
-132 testes, 8 arquivos, todos verdes. Não existia teste nenhum na revisão
+152 testes, 11 arquivos, todos verdes. Não existia teste nenhum na revisão
 anterior.
 
 ---
@@ -68,9 +70,10 @@ entradas sobre orçamento de saída — vale ler antes de mexer em qualquer cham
 à Claude.
 
 Verificados contra a API real, na tela: **1** (currículo colado, com a
-profundidade das tecnologias saindo certa), **3** (ranking na aba Vagas) e
-**5** (Vaga Inteligente). Os passos **2** (pretensão), **4** (justificativa) e
-**6** (conferir o gasto em US$) seguem sem verificação.
+profundidade das tecnologias saindo certa), **3** (ranking na aba Vagas), **4**
+(justificativa — funciona, e achou as pendências 12 e 13) e **5** (Vaga
+Inteligente). Sobram **2** (pretensão) e **6** (conferir o gasto em US$), os
+dois sem chamada paga e portanto baratos de fechar.
 
 Faça na ordem. O custo total é de centavos, e cada passo depende do anterior.
 
@@ -96,6 +99,11 @@ a ordem muda. Custa 1 requisição JSearch + ~US$ 0,024.
 **4. Justificativa.** Abra uma vaga com nota → "Por que esta nota?". A prosa
 deve citar tecnologias que estão no seu currículo. Custa ~US$ 0,008.
 
+> **Verificado em 28/08 e funciona** — a prosa saiu concreta, citando Windows
+> Server, AD e Linux do currículo e apontando o que falta. Mas achou dois
+> defeitos, ambos abertos: o markdown sai cru na tela e a prosa afirma uma
+> nota própria, diferente do Rank IA logo acima. Ver as pendências 12 e 13.
+
 > Com currículo em PDF ela sai mais pobre, e isso é esperado: o texto cru não
 > é guardado para PDF (ver a decisão sobre `texto_extraido` nas pendências).
 
@@ -117,10 +125,25 @@ chamada. Uma tela em branco sem essas linhas significa que nem saiu.
 
 - **Busca real na JSearch** (OpenWeb Ninja), só em `npm run dev`. A chave vive
   no `.env` e apenas o proxy do Vite a enxerga.
+- **"Carregar mais vagas" na aba Vagas**, que traz a próxima página da JSearch
+  e a acrescenta à lista. A paginação local que já existia no rodapé passa a
+  ter o que paginar. O botão só aparece enquanto houver próxima página, e
+  escreve o próprio custo: 1 das 200 requisições + ~US$ 0,03 de reavaliação.
 - **Cache que economiza cota de verdade**: repetir uma consulta serve do
   `localStorage` e **não faz requisição**. Teto de 20 consultas guardadas.
 - **Página de detalhe da vaga**, com a descrição completa e o link externo.
-  Voltar funciona pelo botão e pelo navegador.
+  Voltar funciona pelo botão e pelo navegador. Abre das **duas** listas, e nas
+  duas o alvo é a **linha/card inteiro**: a tabela da aba Vagas (linha toda,
+  com os controles do menu se guardando por conta própria) e os cards da Vaga
+  Inteligente. O título continua sendo um botão focável nas duas — é o caminho
+  de teclado, já que um `div` com `onClick` não pega foco. Trocar de aba
+  fecha o detalhe; sem isso ele aparecia sob o cabeçalho de outra aba.
+  No topo da página há uma barra com **Voltar aos resultados** (botão fantasma,
+  não mais texto solto em cinza fraco) e **Ver vaga no site original** — este
+  também segue no rodapé, com o mesmo rótulo: é a mesma ação, e trocar o nome
+  no meio do fluxo obrigaria a reaprender a tela. Abrir uma vaga rola para o
+  topo: a rolagem da lista era herdada, e clicar numa vaga do fim abria o
+  detalhe já no meio da descrição, com o cabeçalho fora da tela.
 - **Combobox de cidade** com as 5.571 do IBGE, sem acento e com casamento
   exato no topo.
 - **A Avaliação IA existe e funciona, ligada de ponta a ponta:**
@@ -193,6 +216,8 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 | Modelo é `claude-sonnet-5`, não `claude-opus-5` | Custo questionado depois de decidido: US$ 2/US$ 10 por 1M de tokens contra US$ 5/US$ 25 do Opus. `src/custo.js` guarda os dois preços — o do Opus fica de referência histórica, não é mais usado |
 | Ranking em lote (perfil + N vagas, uma chamada) | Decisão antiga (era a pendência 3), agora implementada em `ranking.js`: currículo viaja uma vez, a saída cara encolhe para `{id, nota, motivo}`. Lote de 12 (`TAMANHO_LOTE`); nota **relativa ao conjunto** do lote, não porcentagem absoluta |
 | `.doc` não é mais aceito no upload | Sem servidor não há como abrir Word binário (formato OLE) no navegador. Uma textarea de colar texto cobre `.doc`, `.odt`, exportação do LinkedIn e qualquer outro formato — `.pdf` e `.docx` continuam indo por upload de arquivo |
+| `TAMANHO_LOTE` é 30, e "Carregar mais" reranqueia tudo | Lote menor que a lista a partiria em escalas independentes — medido: 9,1 pontos de diferença média e troca de primeiro lugar. Reranquear junto custa quase o mesmo (continua uma chamada) e devolve uma coluna Rank IA que de fato ordena |
+| A tela acumula resultados em vez de paginar contra a API | O cursor do `search-v2` só anda para frente: não existe "cursor anterior" para pedir. Uma paginação real exigiria guardar cada página para poder voltar; acumular resolve o mesmo problema sem esse estado |
 | A faixa da nota (`min`/`max`) saiu do schema Zod e foi para `validarNotas` | A saída estruturada da Claude não suporta essas restrições — ver "Armadilhas conhecidas" |
 | A lista espera o ranking: vaga e nota aparecem juntas | Era o contrário — a tabela vinha em ~2s e as notas caíam em cima dela depois. Lia como defeito: lista pronta, coluna Rank IA vazia, nada dizendo que ainda vinha coisa. O custo aceito é a espera subir para ~25s, e é por isso que a fase é **nomeada** ("Consultando a API de vagas..." → "Avaliando N vagas com a IA...") — espera longa e muda seria o mesmo problema por outro caminho. Quem decide é `faseDaBusca` em `src/fase.js` |
 | Quem espera é a tela, não o dado | O `banco` continua recebendo as vagas antes do ranking; só a tabela é que aguarda. É isso que mantém a degradação de graça: ranking que falha, que volta parcial, ou que nem roda por falta de currículo cai no `finally`, e a lista aparece com o que tiver. Uma lista que já custou uma das 200 requisições da JSearch nunca fica refém de uma chamada à Claude que deu errado |
@@ -232,6 +257,26 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 2. **Conferir os demais campos** contra dado real — salário e
    `job_salary_period` ainda não foram vistos numa resposta de verdade.
 
+**Achadas em 28/08, no primeiro teste real da justificativa (pendências 12 e
+13 — as duas na mesma tela, e a segunda é a mais séria):**
+
+12. **O markdown da justificativa sai cru.** A Claude devolve prosa com
+    `**negrito**`, e a tela imprime os asteriscos literalmente: o aluno lê
+    "`**Nota: 84 — Muito bom**`". A instrução em `justificativa.js` não proíbe
+    markdown, e a tela não o interpreta — as duas pontas precisam concordar.
+    Duas saídas: pedir texto puro na instrução, ou renderizar o markdown.
+
+13. **A justificativa afirma uma nota própria, que contradiz o Rank IA na
+    mesma tela.** Visto: crachá "Rank IA 78 · Bom" e, dois centímetros abaixo,
+    "Nota: 84 — Muito bom". Não é bug de exibição: a instrução de ranking
+    manda "devolva o número e a faixa", e a justificativa é uma **chamada
+    separada**, que pontua de novo sem ver a nota do lote — e a nota do lote é
+    relativa ao conjunto daquela busca, então os dois números nem são da mesma
+    escala. O ONDE-PARAMOS já previa "prosa que contradiz o número acima dele"
+    para o caso do currículo trocado; aqui acontece com **um perfil só**.
+    A saída provável é a justificativa receber a nota já dada e ter de
+    explicá-la, em vez de produzir outra.
+
 **Dívidas menores:**
 
 6. **`npm run lint` não pega variável inexistente.** Segue como estava: o
@@ -257,6 +302,30 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 ---
 
 ## Armadilhas conhecidas
+
+- **A nota do ranking É relativa ao lote — medido, não suposto.** O cabeçalho
+  do `ranking.js` afirmava isso desde o desenho, e havia motivo para duvidar:
+  a instrução de avaliação define faixas absolutas ("Excelente, Muito bom,
+  Bom, Regular, Baixo"), o que sugeriria notas comparáveis. **A medição deu
+  razão ao comentário.** As mesmas 10 vagas reais, ranqueadas num lote só e
+  partidas em dois de 5: diferença média de **9,1 pontos**, máxima de **14**, e
+  o primeiro lugar **trocou** — a melhor vaga caiu de 80 para 66 e outra, de
+  lote diferente, assumiu com 72. O padrão explica o mecanismo: as 5 do lote
+  mais fraco subiram **todas** (+6 a +10), porque avaliadas só contra si mesmas
+  são graduadas na curva.
+
+  Consequência prática: **lista maior que `TAMANHO_LOTE` ordena errado por
+  Rank IA.** É por isso que o lote subiu para 30 e que "Carregar mais"
+  reranqueia a lista inteira em vez de só as vagas novas — uma chamada só, e
+  todas as notas da mesma comparação. Passando de 30 o fatiamento volta e o
+  problema com ele.
+
+- **O cursor da JSearch mora em `data.cursor`, não no topo da resposta.** A
+  documentação nomeia o campo mas não diz o nível, e o topo era o palpite
+  natural. Conferido contra a resposta real: `{status, request_id, parameters,
+  data: { jobs, cursor }}`. Errar aqui não daria erro nenhum — daria uma
+  paginação que nunca avança, calada. `cursorDaResposta` aceita os dois
+  níveis de propósito.
 
 - **`max_tokens` inclui o pensamento, e o modelo pensa sem você pedir.** Esta
   é a que custou o Rank IA inteiro. O `claude-sonnet-5` roda thinking
@@ -316,6 +385,22 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
   condicionados. Se acrescentar um quarto, condicione também: afirmar
   categoricamente ali é o erro que se repete.
 
+- **Quem para a propagação é o chamador, não o componente — e embrulhar de
+  novo quebra.** Quando a linha da tabela virou clicável, os quatro controles
+  dentro dela (menu, Ver detalhes, Favoritar, Arquivar) precisavam parar de
+  vazar o clique para a linha. Parecia trabalho a fazer dentro da `Linha`; não
+  era. Os handlers já chamavam `e.stopPropagation()` **no chamador**, em
+  `App.jsx`, por causa do listener de documento que fecha o menu — e em React
+  parar no filho já impede o `onClick` do ancestral, então o guarda que
+  existia era exatamente o que faltava.
+
+  Embrulhar dentro da `Linha` (`onClick={(e) => { e.stopPropagation();
+  onMenu() }}`) além de redundante **lança**: `onMenu`, `onFavorito` e
+  `onArquivar` chamam `e.stopPropagation()` sem `?.`, e invocá-los sem evento
+  dá `TypeError`. Só `onAbrir` tolera, porque tem o `?.` — posto ali para o
+  caminho do título. Antes de "proteger" um handler, leia o que o chamador já
+  faz com o evento.
+
 - **Props não são conferidas por nada.** JavaScript não confere props: uma
   chamada de componente com props novas e a definição ainda com as antigas
   passa limpo em `npm test` **e** em `npm run build` — só quebra na tela.
@@ -360,7 +445,7 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 
 ```bash
 npm run dev        # a busca e a Avaliação IA só funcionam aqui — porta 5173, caminho /vagasatalhointeligenteparati/
-npm test           # vitest — 132 testes, 8 arquivos
+npm test           # vitest — 152 testes, 11 arquivos
 npm run lint       # oxlint (não pega no-undef hoje; veja a pendência 6)
 npm run build      # gera dist/
 npm run cidades    # regenera src/data/cidades.js a partir do IBGE
