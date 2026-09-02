@@ -109,6 +109,57 @@ export function resumirVaga(vaga) {
 }
 
 /**
+ * Quantas vagas já pontuadas a âncora leva. 30 x ~15 tokens = ~450, ou
+ * US$ 0,0009 — ruído perto dos ~810 tokens que uma descrição custa.
+ */
+export const TETO_CALIBRACAO = 30
+
+/**
+ * A âncora de escala: as vagas já pontuadas, reduzidas a `{cargo, nota}`.
+ *
+ * Existe por causa do "Carregar mais". Ele reranqueava a lista inteira a cada
+ * clique — medido no log de custo real, a segunda chamada custou 41% mais que
+ * a primeira (10.086 -> 17.668 tokens de entrada), e numa sessão de três
+ * cliques 60% do conteúdo de vaga enviado era repetição pura. Agora só as
+ * vagas novas viajam com descrição.
+ *
+ * O que isso reabre está medido no cabeçalho deste módulo, e **não é ruído,
+ * é viés**: um lote avaliado só contra si mesmo é graduado na curva e sobe em
+ * bloco (+6 a +10 nas cinco vagas do lote fraco). Numa tabela ordenada por
+ * Rank IA, isso põe vaga ruim da página 2 acima de vaga boa da página 1.
+ *
+ * A âncora é a defesa barata: sem descrição, o item custa ~15 tokens em vez
+ * de ~810, e mostra ao modelo a escala que ele mesmo acabou de usar.
+ *
+ * Vaga sem nota fica de fora — ancorar em `null` é pior que não ancorar.
+ *
+ * Acima do teto a lista é **amostrada ao longo da faixa de notas**, não
+ * cortada no começo: pegar as 30 primeiras poderia trazer só vagas da página
+ * 1, todas de nota parecida, e uma âncora que mostra só o meio da escala não
+ * ancora as pontas.
+ */
+export function calibracaoDe(vagas) {
+  const comNota = (Array.isArray(vagas) ? vagas : [])
+    .filter((v) => Number.isFinite(v?.rank))
+    .map((v) => ({ cargo: v.cargo ?? null, nota: v.rank }))
+    .sort((a, b) => a.nota - b.nota)
+
+  if (comNota.length <= TETO_CALIBRACAO) return comNota
+
+  // Índices espaçados que sempre incluem as duas pontas da faixa.
+  const passo = (comNota.length - 1) / (TETO_CALIBRACAO - 1)
+  const vistos = new Set()
+  const amostra = []
+  for (let i = 0; i < TETO_CALIBRACAO; i++) {
+    const idx = Math.round(i * passo)
+    if (vistos.has(idx)) continue
+    vistos.add(idx)
+    amostra.push(comNota[idx])
+  }
+  return amostra
+}
+
+/**
  * Três conferências: id existe no conjunto enviado, nota é número de 0 a 100,
  * e duplicata não sobrescreve. O que não passar entra em `faltando` e vai numa
  * segunda chamada.
@@ -146,7 +197,7 @@ export function aplicarNotas(vagas, validas) {
   })
 }
 
-async function pontuarLote(perfil, instrucao, vagas) {
+async function pontuarLote(perfil, instrucao, vagas, calibracao = []) {
   // O `ref` é a posição no lote: 0, 1, 2. Ele existe porque o `job_id` da
   // JSearch é base64 de ~400 caracteres, e pedir ao modelo que ecoasse esse id
   // para as 12 vagas do lote gastava ~1.930 tokens de saída contra um
@@ -160,6 +211,14 @@ async function pontuarLote(perfil, instrucao, vagas) {
   // vaga. Traduzir de volta aqui, antes de devolver, é o que impede a nota de
   // pousar na vaga errada.
   const enviadas = vagas.map((vaga, ref) => ({ ref, ...resumirVaga(vaga) }))
+
+  // A âncora entra como texto separado, e o system diz que ela não é fila de
+  // trabalho. Mesmo que o modelo desobedecesse e devolvesse nota para ela,
+  // `validarNotas` descartaria: a âncora não tem `ref`, e o filtro só aceita
+  // os refs que de fato foram enviados.
+  const ancora = calibracao.length
+    ? `\n\nJá avaliadas nesta mesma busca, com as notas que você deu — use como referência da escala, na mesma régua. NÃO as pontue de novo, elas não estão na lista abaixo:\n${JSON.stringify(calibracao)}`
+    : ''
   // Cada lote passa pelo invólucro, então o teto é reconferido a cada chamada
   // — inclusive na segunda volta, que sai depois da primeira já ter gasto.
   const resposta = await chamarEstruturado(TIPOS.RANKING, {
@@ -175,7 +234,7 @@ async function pontuarLote(perfil, instrucao, vagas) {
     messages: [
       {
         role: 'user',
-        content: `Perfil do candidato:\n${JSON.stringify(perfil, null, 2)}\n\nVagas:\n${JSON.stringify(enviadas, null, 2)}`,
+        content: `Perfil do candidato:\n${JSON.stringify(perfil, null, 2)}${ancora}\n\nVagas a pontuar:\n${JSON.stringify(enviadas, null, 2)}`,
       },
     ],
   })
@@ -237,12 +296,12 @@ function emLotes(itens, tamanho) {
  * próprio try/catch: quem falha vira `faltando` (tentado de novo na segunda
  * volta, e se persistir sai com `rank: null`), quem já respondeu fica de pé.
  */
-async function pontuarTodos(perfil, instrucao, vagas) {
+async function pontuarTodos(perfil, instrucao, vagas, calibracao = []) {
   let validas = new Map()
   const faltando = []
   for (const lote of emLotes(vagas, TAMANHO_LOTE)) {
     try {
-      const resultado = await pontuarLote(perfil, instrucao, lote)
+      const resultado = await pontuarLote(perfil, instrucao, lote, calibracao)
       validas = new Map([...validas, ...resultado.validas])
       faltando.push(...resultado.faltando)
     } catch (err) {
@@ -259,14 +318,15 @@ async function pontuarTodos(perfil, instrucao, vagas) {
  * nota e a lista aparece do mesmo jeito — tela em branco por causa de um item
  * faltando seria pior que ranking parcial.
  */
-export async function ranquear(perfil, instrucao, vagas) {
-  const primeira = await pontuarTodos(perfil, instrucao, vagas)
+export async function ranquear(perfil, instrucao, vagas, jaAvaliadas = []) {
+  const calibracao = calibracaoDe(jaAvaliadas)
+  const primeira = await pontuarTodos(perfil, instrucao, vagas, calibracao)
   let validas = primeira.validas
 
   if (primeira.faltando.length) {
     console.warn('[claude] sem nota na primeira volta:', primeira.faltando)
     const restantes = vagas.filter((v) => primeira.faltando.includes(v.id))
-    const segunda = await pontuarTodos(perfil, instrucao, restantes)
+    const segunda = await pontuarTodos(perfil, instrucao, restantes, calibracao)
     validas = new Map([...validas, ...segunda.validas])
     if (segunda.faltando.length) {
       console.warn('[claude] seguem sem nota:', segunda.faltando)

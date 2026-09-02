@@ -17,7 +17,9 @@ import {
 import {
   NotasSchema,
   TAMANHO_LOTE,
+  TETO_CALIBRACAO,
   aplicarNotas,
+  calibracaoDe,
   ranquear,
   resumirVaga,
   validarNotas,
@@ -517,5 +519,124 @@ describe('id gigante da JSearch', () => {
     expect(chamarEstruturado).toHaveBeenCalledTimes(2)
     expect(resultado.find((v) => v.id === `${ID_REAL}A`).rank).toBe(80)
     expect(resultado.find((v) => v.id === `${ID_REAL}B`).rank).toBe(55)
+  })
+})
+
+
+/**
+ * A âncora de calibração.
+ *
+ * "Carregar mais" reranqueava a lista inteira a cada clique — medido no log
+ * de custo real, a segunda chamada custou 41% mais que a primeira (in 10.086
+ * -> 17.668), e numa sessão de três cliques 60% do conteúdo de vaga enviado
+ * era repetição. Agora só as vagas novas viajam com descrição.
+ *
+ * O problema que isso reabre não é ruído, é viés, e já estava medido no
+ * cabeçalho do módulo: um lote avaliado só contra si mesmo é graduado na
+ * curva, e sobe em bloco (+6 a +10 nas cinco vagas do lote fraco). Numa
+ * tabela ordenada por Rank IA, isso põe vaga ruim da página 2 acima de vaga
+ * boa da página 1.
+ *
+ * A âncora é a defesa: as já pontuadas viajam só como `{cargo, nota}`, sem
+ * descrição — ~15 tokens por vaga contra ~810 — para o modelo ver a escala
+ * que ele mesmo usou antes. Custa US$ 0,0009 por clique.
+ */
+describe('calibracaoDe', () => {
+  const avaliada = (id, cargo, rank) => ({ ...vaga(id), cargo, rank })
+
+  test('leva cargo e nota', () => {
+    expect(calibracaoDe([avaliada('a1', 'Analista', 70)])).toEqual([
+      { cargo: 'Analista', nota: 70 },
+    ])
+  })
+
+  // O ponto econômico inteiro: a descrição é ~810 tokens por vaga e é ela
+  // que a gente parou de reenviar. Se vazasse para a âncora, a mudança não
+  // teria economizado nada.
+  test('NÃO leva a descrição — é o que a mudança existe para não reenviar', () => {
+    const c = calibracaoDe([avaliada('a1', 'Analista', 70)])
+    expect(JSON.stringify(c)).not.toContain('Suporte a usuários')
+    expect(Object.keys(c[0]).sort()).toEqual(['cargo', 'nota'])
+  })
+
+  // Vaga que ficou sem nota (o modelo não devolveu, ou o lote falhou) não é
+  // referência de escala nenhuma — ancorar em `null` seria pior que não
+  // ancorar.
+  test('vaga sem nota fica de fora', () => {
+    const lista = [avaliada('a1', 'Analista', 70), avaliada('a2', 'Dev', null)]
+    expect(calibracaoDe(lista)).toEqual([{ cargo: 'Analista', nota: 70 }])
+  })
+
+  test('lista vazia devolve vazio, e não quebra', () => {
+    expect(calibracaoDe([])).toEqual([])
+    expect(calibracaoDe(undefined)).toEqual([])
+  })
+
+  // Acima do teto a âncora é amostrada ao longo da faixa de notas, não
+  // cortada no começo: pegar as 30 primeiras poderia trazer só vagas da
+  // página 1, todas de nota parecida, e uma âncora que só mostra o meio da
+  // escala não ancora as pontas.
+  test('acima do teto, amostra a faixa inteira em vez de truncar', () => {
+    const muitas = Array.from({ length: TETO_CALIBRACAO * 3 }, (_, i) =>
+      avaliada(`v${i}`, `Cargo ${i}`, i),
+    )
+    const c = calibracaoDe(muitas)
+    expect(c).toHaveLength(TETO_CALIBRACAO)
+    const notas = c.map((x) => x.nota)
+    expect(Math.min(...notas)).toBe(0)
+    expect(Math.max(...notas)).toBe(TETO_CALIBRACAO * 3 - 1)
+  })
+})
+
+describe('ranquear com âncora', () => {
+  const respondeCom = (n) =>
+    chamarEstruturado.mockResolvedValue({
+      parsed_output: {
+        notas: Array.from({ length: n }, (_, ref) => ({
+          ref,
+          nota: 50,
+          motivo: 'ok',
+        })),
+      },
+    })
+
+  test('sem já-avaliadas, a chamada sai como antes', async () => {
+    chamarEstruturado.mockClear()
+    respondeCom(1)
+    await ranquear({ cargo: 'x' }, 'instrução', [vaga('n1')])
+    const conteudo = chamarEstruturado.mock.calls[0][1].messages[0].content
+    expect(conteudo).not.toContain('Já avaliadas')
+  })
+
+  test('com já-avaliadas, a âncora viaja junto', async () => {
+    chamarEstruturado.mockClear()
+    respondeCom(1)
+    const antigas = [{ ...vaga('a1'), cargo: 'Supervisor de TI', rank: 68 }]
+    await ranquear({ cargo: 'x' }, 'instrução', [vaga('n1')], antigas)
+
+    const conteudo = chamarEstruturado.mock.calls[0][1].messages[0].content
+    expect(conteudo).toContain('Já avaliadas')
+    expect(conteudo).toContain('Supervisor de TI')
+    expect(conteudo).toContain('68')
+  })
+
+  // A âncora é referência, não fila de trabalho. Se ela virasse vaga a
+  // pontuar, a economia sumiria e a nota da página 1 seria sobrescrita por
+  // uma segunda opinião — exatamente o que paramos de pagar.
+  test('a âncora não vira vaga a pontuar: só as novas voltam com nota', async () => {
+    chamarEstruturado.mockClear()
+    respondeCom(1)
+    const antigas = [{ ...vaga('a1'), cargo: 'Supervisor de TI', rank: 68 }]
+    const resultado = await ranquear(
+      { cargo: 'x' },
+      'instrução',
+      [vaga('n1')],
+      antigas,
+    )
+
+    expect(resultado.map((v) => v.id)).toEqual(['n1'])
+    // Uma vaga só foi enviada para pontuar, apesar da âncora ter outra.
+    const enviadas = chamarEstruturado.mock.calls[0][1].messages[0].content
+    expect(enviadas).toContain('n1')
   })
 })

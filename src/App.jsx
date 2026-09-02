@@ -2613,6 +2613,11 @@ export default function App() {
   const [carregandoMais, setCarregandoMais] = useState(false)
 
   const [ranqueando, setRanqueando] = useState(false)
+  // Quantas vagas a chamada em curso está avaliando. Existe porque desde que
+  // o "Carregar mais" passou a mandar só as novas, `banco.length` deixou de
+  // ser essa resposta — e a tela escreveria "Avaliando 20 vagas" para uma
+  // chamada de 10.
+  const [ranqueandoQuantas, setRanqueandoQuantas] = useState(0)
   const [erroRanking, setErroRanking] = useState(null)
 
   // A cota vem do localStorage, não do zero: é a única coisa do protótipo que
@@ -2794,7 +2799,7 @@ export default function App() {
    */
   const faseVagas =
     aba === 'vagas'
-      ? faseDaBusca({ buscando, ranqueando, quantas: banco.length })
+      ? faseDaBusca({ buscando, ranqueando, quantas: ranqueandoQuantas })
       : null
 
   /**
@@ -2935,6 +2940,7 @@ export default function App() {
     setCarregandoMais(true)
 
     let listaCompleta = null
+    let apenasNovas = []
     try {
       // `janelaBaixada`, não `janela`: o cursor pertence à busca que o
       // gerou. Se a tela apertou para "Última semana" depois de baixar o
@@ -2951,7 +2957,8 @@ export default function App() {
       // Mescla por id: a mesma vaga pode voltar em duas páginas, e duas
       // linhas idênticas na tabela seriam pior que uma vaga a menos.
       const jaTem = new Set(banco.map((v) => v.id))
-      listaCompleta = [...banco, ...novas.filter((v) => !jaTem.has(v.id))]
+      apenasNovas = novas.filter((v) => !jaTem.has(v.id))
+      listaCompleta = [...banco, ...apenasNovas]
 
       setBanco(listaCompleta)
       setCursor(proximo)
@@ -2979,8 +2986,16 @@ export default function App() {
       setCarregandoMais(false)
     }
 
-    if (listaCompleta) {
-      await ranquearBanco(listaCompleta)
+    // Só as vagas novas vão para a Claude; as já pontuadas viajam como
+    // âncora de escala (`{cargo, nota}`, sem descrição). Antes a lista
+    // inteira era reenviada a cada clique: medido no log de custo real, a
+    // segunda chamada custou 41% mais que a primeira, e numa sessão de três
+    // cliques 60% do conteúdo de vaga era repetição.
+    //
+    // Página só com repetidas não chama a Claude: `ranquearBanco` recusa
+    // lista vazia, e não há nota nova a pedir.
+    if (apenasNovas.length) {
+      await ranquearBanco(apenasNovas, banco)
     }
   }
 
@@ -3016,13 +3031,18 @@ export default function App() {
    * devolveu, que custaram uma das 200 requisições mensais, e um aviso aparece
    * acima da tabela sem tirá-las da tela.
    */
-  async function ranquearBanco(vagas) {
+  async function ranquearBanco(vagas, jaAvaliadas = []) {
     const perfil = perfilEfetivo(cv)
     if (!perfil || vagas.length === 0) return
 
+    // Quantas estão de fato indo para a Claude — não `banco.length`. No
+    // "Carregar mais" as duas divergem: o banco já tem 20 e só 10 viajam.
+    setRanqueandoQuantas(vagas.length)
     setRanqueando(true)
     try {
-      const ranqueadas = await ranquear(perfil, instrucao, vagas)
+      const ranqueadas = await ranquear(perfil, instrucao, vagas, jaAvaliadas)
+      // `mesclarRank` mapeia sobre a lista atual e só substitui quem voltou:
+      // as vagas antigas mantêm a nota que já custou uma chamada.
       setBanco((atual) => mesclarRank(atual, ranqueadas))
     } catch (err) {
       setErroRanking(mensagemDoErro(err))
@@ -3480,8 +3500,8 @@ export default function App() {
                           : 'Carregar mais vagas'}
                     </button>
                     <div style={{ fontSize: 12, color: '#7C8699' }}>
-                      Consome 1 das 200 requisições do mês e reavalia a lista
-                      inteira com a IA (~US$ 0,03).
+                      Consome 1 das 200 requisições do mês e avalia com a IA
+                      só as vagas novas (~US$ 0,03).
                     </div>
                   </div>
                 )}

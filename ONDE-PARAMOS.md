@@ -5,6 +5,68 @@ funcionam*; este arquivo diz *em que pé estão* e *o que fazer a seguir*.
 
 ---
 
+## 02/09 (noite) — "Carregar mais" reenviava tudo
+
+Suspeita levantada pelo gasto na API, e estava certa: `carregarMais` terminava
+em `ranquearBanco(listaCompleta)` — a lista acumulada inteira, não as novas.
+
+Era deliberado e documentado (notas de lotes diferentes não são comparáveis, e
+a tabela ordena por Rank IA). Mas o comentário afirmava que *"reranquear junto
+custa quase o mesmo, porque continua sendo uma chamada só"* — e isso não se
+sustenta. No log de custo real:
+
+    00:39:04  busca          in 10.086  out 2.637  = $0,0465
+    00:40:40  carregar mais  in 17.668  out 3.048  = $0,0658   +41%
+
+Projetando busca + 3 cliques: **$0,2117 contra $0,1045**, 102% de sobrecusto, e
+100 vagas-slot enviadas para 40 vagas únicas — 60% de repetição pura.
+
+**E a justificativa se desmontava exatamente onde doía.** Ela valia "enquanto a
+lista couber em TAMANHO_LOTE" (30). Rodando o `emLotes`: 40 vagas viram
+`[20, 20]` — duas chamadas com escalas independentes. No terceiro clique você
+paga a entrada de 40 vagas *e* recebe a mistura de escalas que o desenho
+existia para evitar. Pior dos dois mundos, em silêncio.
+
+Havia ainda um furo na premissa. Ela se apoia em "9,1 pontos de diferença
+média" ao partir o lote — mas a medição de effort da rodada anterior mostrou
+que **duas chamadas idênticas já divergem 6,8 pontos**. O dano marginal do
+fatiamento é ~2,3 pontos, não 9,1.
+
+### O que ficou
+
+Só as vagas novas viajam com descrição. As já pontuadas vão como **âncora de
+escala** — `{cargo, nota}`, sem descrição (`calibracaoDe`, com teto de 30 e
+amostragem ao longo da faixa de notas, para a âncora não mostrar só o meio da
+escala).
+
+A âncora não é opcional: o viés que ela evita não é ruído, é direcional. Um
+lote avaliado só contra si mesmo sobe em bloco (+6 a +10, medido). Sem ela,
+vaga ruim da página 2 subiria acima de vaga boa da página 1.
+
+Verificado no app, busca "Analista" em Porto Alegre:
+
+- a tela diz **"Avaliando 5 vagas com a IA"** (as novas), não 15 — precisou de
+  um contador próprio, porque `banco.length` deixou de ser essa resposta;
+- entrada de **6.861** contra os ~15.400 do comportamento antigo;
+- as notas antigas **preservadas ao pé da letra** (`mesclarRank` já fazia isso);
+- a vaga nova entrou com **15**, numa lista cujas notas iam de 3 a 30 — dentro
+  da faixa, que é a âncora funcionando;
+- **$0,0157 contra ~$0,0399**, 61% mais barato, 6,3s em vez de ~15s.
+
+Página que só traz repetidas agora não chama a Claude nenhuma vez — antes
+reranqueava tudo por nada. Aconteceu no teste, com a busca de Caxias do Sul.
+
+O penhasco dos 40 vagas some junto: cada chamada só vê a página nova, e nunca
+mais estoura o `TAMANHO_LOTE`.
+
+Estimativa corrigida: a âncora custa ~60 tokens por vaga, não os ~15 que eu
+tinha projetado — títulos de vaga são longos. Continua irrelevante ($0,0012 por
+clique), mas o número no comentário é o medido.
+
+Testes: 178 -> 186.
+
+---
+
 ## 02/09 (tarde) — a espera de 27s do "Avaliando N vagas com a IA"
 
 Reclamação: a avaliação demorava demais para um sistema simples. O sistema é

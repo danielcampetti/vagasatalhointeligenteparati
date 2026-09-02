@@ -318,6 +318,34 @@ Duas coisas ficam claras na tabela e valem como próximos cortes:
   mas ainda **não foi medido contra a qualidade da nota**, então não foi feito.
 - `JSON.stringify(x, null, 2)` gasta **356 tokens só em indentação**.
 
+### "Carregar mais" manda só as vagas novas
+
+Cada clique traz uma página nova da JSearch e a acrescenta à lista. Durante um
+tempo ele **reranqueava a lista inteira** a cada clique, para que todas as
+notas saíssem da mesma régua. Custava caro: medido no log real, a segunda
+chamada custou 41% mais que a primeira (10.086 -> 17.668 tokens de entrada), e
+numa sessão de três cliques 60% do conteúdo de vaga enviado era repetição.
+
+Pior: a justificativa se desmontava justamente onde importava. Ela valia
+"enquanto a lista couber em `TAMANHO_LOTE`" (30) — mas no terceiro clique a
+lista chega a 40, o `emLotes` parte em `[20, 20]`, e você paga a entrada de 40
+vagas **e** recebe as escalas misturadas que o desenho existia para evitar.
+
+Hoje só as vagas novas viajam com descrição. Para não perder a régua, as já
+pontuadas vão junto como **âncora**: apenas `{cargo, nota}`, sem descrição —
+~60 tokens por vaga contra ~900 de uma descrição.
+
+A âncora não é enfeite. O viés que ela evita está medido no cabeçalho do
+`ranking.js`: um lote avaliado só contra si mesmo é graduado na curva e sobe
+em bloco (+6 a +10). Numa tabela ordenada por Rank IA isso põe vaga ruim da
+página 2 acima de vaga boa da página 1. Verificado funcionando: numa lista
+cujas notas iam de 3 a 30, a vaga nova entrou com 15 — dentro da faixa, não
+acima dela.
+
+Resultado medido num clique real: **$0,0157 contra ~$0,0399**, 61% mais
+barato, e 6,3s em vez de ~15s. Página que só traz repetidas não chama a Claude
+nenhuma vez.
+
 > **O medidor da aba Controle conta só o que o app gastou.** Chamadas feitas
 > fora dele — um script de teste com a mesma chave, por exemplo — aparecem na
 > fatura da Anthropic e não aqui. Ao comparar os dois números, confira o
