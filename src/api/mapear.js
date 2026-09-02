@@ -122,6 +122,39 @@ function modalidadeDe(vaga) {
 }
 
 /**
+ * O link de candidatura, ou `null` — e só se for seguro pôr num `href`.
+ *
+ * A cadeia de reserva (`apply_options`) já existia: a API nem sempre traz o
+ * link direto. O que é novo é a peneira, e ela entrou junto com a coluna "Ver
+ * Vaga", que transformou este valor num `<a href>` clicável em toda linha da
+ * tabela.
+ *
+ * Antes o link só existia na página de detalhe, atrás de um clique
+ * deliberado. Dez âncoras por tela, montadas com URLs que vieram de uma API de
+ * terceiros e que ninguém leu, é outro cálculo: um `javascript:` num `href`
+ * executa ao clique, na origem da própria página.
+ *
+ * O saneamento mora aqui, e não na tela, porque este é o ponto onde o link
+ * nasce. Barrado na origem, o valor perigoso nunca chega a existir no estado
+ * do app — e nenhuma tela futura precisa lembrar de conferir.
+ *
+ * A peneira é por candidato, não uma desistência no primeiro tropeço: link
+ * principal recusado ainda deixa a reserva ser avaliada.
+ */
+export function linkDeCandidatura(vaga) {
+  const candidatos = [vaga?.job_apply_link, vaga?.apply_options?.[0]?.apply_link]
+  for (const cru of candidatos) {
+    if (typeof cru !== 'string') continue
+    const url = cru.trim()
+    if (!url) continue
+    // Lista de permissão, não de bloqueio: esquema novo e estranho é recusado
+    // por omissão, que é o lado certo para errar aqui.
+    if (/^https?:\/\//i.test(url)) return url
+  }
+  return null
+}
+
+/**
  * As "techs" da tabela não existem na API — ela devolve a descrição inteira.
  * Extrair tecnologias dali é trabalho para a etapa da Claude; por ora fica
  * vazio, e a descrição crua é guardada para essa comparação futura.
@@ -147,8 +180,9 @@ export function mapearVaga(vaga, indice) {
     fav: false,
     // Guardada para a etapa da Claude comparar com o currículo.
     descricao: vaga.job_description ?? '',
-    // `apply_options` costuma trazer alternativas quando o link direto falta.
-    link: vaga.job_apply_link ?? vaga.apply_options?.[0]?.apply_link ?? null,
+    // `apply_options` costuma trazer alternativas quando o link direto falta,
+    // e a URL passa por uma peneira antes de virar `href` — veja acima.
+    link: linkDeCandidatura(vaga),
   }
 }
 

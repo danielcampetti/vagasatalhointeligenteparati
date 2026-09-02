@@ -1137,9 +1137,66 @@ function CabecalhoTabela({
           </div>
         )}
       </div>
-      <div>Status</div>
+      <div>Ver Vaga</div>
       <div />
     </div>
+  )
+}
+
+/**
+ * O atalho para o anúncio original, direto da listagem.
+ *
+ * Ocupa o lugar que era da coluna Status. O status não estava dizendo nada:
+ * `mapear.js` fixa "Ativa" em toda vaga vinda da API — a JSearch não tem campo
+ * de expiração, conferido nos 35 campos da resposta —, então a coluna inteira
+ * mostrava a mesma pílula verde em todas as linhas.
+ *
+ * Três cuidados que não são enfeite:
+ *
+ * `stopPropagation` porque a linha inteira já abre o detalhe. Sem ele, um
+ * clique aqui dispararia as duas coisas: a aba externa **e** a página interna
+ * por baixo dela.
+ *
+ * `rel="noopener noreferrer"` pelo mesmo motivo do botão da página de detalhe:
+ * sem `noopener`, a página aberta recebe uma referência a esta pela
+ * `window.opener` e pode trocar o endereço daqui. São links de terceiros,
+ * vindos de uma API.
+ *
+ * E o link já chega saneado de `mapear.js` (`linkDeCandidatura`): só `http` e
+ * `https` viram `href`. A peneira mora lá, na origem, e não aqui — assim o
+ * valor perigoso nunca existe no estado, e esta tela não é a única guarda.
+ *
+ * Sem link vira "—", como todo campo ausente da tabela. Um ícone morto
+ * prometeria uma ação que não acontece.
+ */
+function LinkDaVaga({ link, rotulo = null }) {
+  if (!link) {
+    return <span style={{ color: '#4A5468' }}>—</span>
+  }
+  return (
+    <a
+      href={link}
+      target="_blank"
+      rel="noopener noreferrer"
+      onClick={(e) => e.stopPropagation()}
+      title="Abrir o anúncio no site original"
+      aria-label="Abrir o anúncio no site original"
+      className="text-[#8A94A6] hover:text-[#60A5FA]"
+      style={{
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 6,
+        padding: '5px 9px',
+        borderRadius: 8,
+        border: '1px solid rgba(255,255,255,0.1)',
+        fontSize: 12.5,
+        fontWeight: 500,
+        textDecoration: 'none',
+      }}
+    >
+      {rotulo}
+      <IconeExterno />
+    </a>
   )
 }
 
@@ -1307,11 +1364,7 @@ function Linha({ vaga, menuAberto, onMenu, onAbrir, onFavorito, onArquivar }) {
       </div>
 
       <div>
-        {vaga.status ? (
-          <span style={ESTILO_STATUS[vaga.status]}>{vaga.status}</span>
-        ) : (
-          <span style={{ color: '#4A5468' }}>—</span>
-        )}
+        <LinkDaVaga link={vaga.link} />
       </div>
 
       <div
@@ -1457,9 +1510,7 @@ function Card({ vaga, onAbrir }) {
               {vaga.modalidade}
             </span>
           )}
-          {vaga.status && (
-            <span style={ESTILO_STATUS[vaga.status]}>{vaga.status}</span>
-          )}
+          <LinkDaVaga link={vaga.link} rotulo="Ver vaga" />
           <span style={{ fontSize: 12.5, color: '#D3DAE6' }}>{d.salario}</span>
           {d.desde && (
             <span style={{ fontSize: 12, color: '#7C8699' }}>{d.desde}</span>

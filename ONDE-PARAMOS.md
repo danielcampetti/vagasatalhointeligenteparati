@@ -5,6 +5,52 @@ funcionam*; este arquivo diz *em que pé estão* e *o que fazer a seguir*.
 
 ---
 
+## 02/09 (noite, 3) — a coluna Status virou "Ver Vaga"
+
+Pedido: trocar o Status por um atalho para o anúncio, com ícone na linha, para
+poder ir pelo detalhe interno **ou** direto para o site do anunciante.
+
+A troca se justificava sozinha: `mapear.js` fixa `status: 'Ativa'` em toda vaga
+vinda da API — a JSearch não tem campo de expiração, conferido nos 35 campos da
+resposta —, então a coluna repetia a mesma pílula verde em todas as linhas. Era
+uma coluna constante dando lugar a uma acionável.
+
+Feito na tabela e no cartão de tela estreita. A página de detalhe manteve o
+status: ela tem espaço de sobra e já tinha o botão "Ver vaga no site original".
+
+O componente `LinkDaVaga` carrega três cuidados:
+
+- `e.stopPropagation()`, porque a linha inteira já abre o detalhe — sem ele o
+  clique no ícone abriria a aba externa **e** a página interna por baixo;
+- `rel="noopener noreferrer"`, o mesmo raciocínio já registrado no README para
+  o botão do detalhe;
+- a URL chega saneada da origem.
+
+Esse terceiro item foi o que mudou de peso e virou teste. Enquanto o link só
+existia no detalhe, atrás de um clique deliberado, o risco era teórico. Dez
+âncoras por tela, montadas com URLs vindas de uma API de terceiros que ninguém
+leu, é outro cálculo — um `javascript:` num `href` executa ao clique, na origem
+da própria página. O `linkDeCandidatura` entrou no `mapear.js` com lista de
+permissão (`http`/`https`, esquema estranho recusado por omissão) e peneira por
+candidato: link principal recusado ainda deixa a reserva de `apply_options` ser
+avaliada.
+
+O `mapear.js` não tinha teste nenhum até aqui; ganhou o primeiro.
+
+Verificado no app, busca "Analista" em Porto Alegre:
+
+- cabeçalho lê "Ver Vaga", "Status" sumiu da listagem;
+- 10 âncoras, todas com `target="_blank"` e `rel="noopener noreferrer"`, com
+  hrefs reais (gupy.io, simplyhired, divulgavagas);
+- **clique no ícone não abriu o detalhe**, e o controle confirma que clicar na
+  linha continua abrindo — que é a prova de que o `stopPropagation` está no
+  lugar certo e só ali;
+- o cartão de tela estreita mostra "Ver vaga" com rótulo, no lugar da pílula.
+
+Testes: 194 -> 202.
+
+---
+
 ## 02/09 (noite, 2) — Buscar devolvia 27 vagas
 
 Relatado: clicar em Buscar trouxe 27 vagas em vez de 10.

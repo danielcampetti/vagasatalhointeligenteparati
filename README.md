@@ -193,9 +193,9 @@ faria a tabela mentir sobre o que a busca trouxe.
 | Publicada | cadeia de três: `job_posted_at_timestamp`, `job_posted_at_datetime_utc`, e por último o texto `job_posted_at` ("há 7 dias"). **Na prática só o terceiro chega**: numa resposta real de 10 vagas os dois primeiros vieram `null` nas dez, e o texto veio em cinco. As outras cinco ficam com data desconhecida — e é sobre elas que a janela de publicação age |
 | Salário | `job_min_salary`/`job_max_salary` — **frequentemente vazios**. Valor anual é descartado em vez de virar "R$ 60 mil por mês" |
 | Modalidade | `work_arrangement` (`remote` / `onsite` / `hybrid`) → Remoto, Presencial, Híbrido |
-| Link | `job_apply_link`, com `apply_options[0].apply_link` de reserva |
+| **Ver Vaga** | `job_apply_link`, com `apply_options[0].apply_link` de reserva — e uma peneira que só deixa passar `http`/`https` (`linkDeCandidatura`) |
 | **Rank IA** | **não existe** — é a comparação currículo × descrição, a etapa da Claude |
-| Status | a API não tem o campo. Toda vaga recém-buscada entra como **Ativa** — é o que se pode afirmar do anúncio; "Em análise" e "Encerrada" são estados do processo seletivo, sem fonte |
+| ~~Status~~ | **saiu da listagem.** A API não tem o campo, então `mapear.js` fixava "Ativa" em toda vaga e a coluna inteira mostrava a mesma pílula verde. O campo continua na vaga e na página de detalhe; o lugar dele na tabela virou o "Ver Vaga" |
 
 A `job_description` inteira é guardada em cada vaga. Ela não aparece na tabela:
 está lá para a comparação com o currículo.
@@ -317,6 +317,36 @@ Duas coisas ficam claras na tabela e valem como próximos cortes:
   para o cafezinho. Cortar em 1.500 caracteres tiraria **40% da entrada** —
   mas ainda **não foi medido contra a qualidade da nota**, então não foi feito.
 - `JSON.stringify(x, null, 2)` gasta **356 tokens só em indentação**.
+
+### "Ver Vaga": o anúncio a um clique da listagem
+
+A coluna Status foi substituída por um link direto para o anúncio original,
+na tabela e no cartão de tela estreita. O status não estava dizendo nada —
+`mapear.js` fixa "Ativa" em toda vaga vinda da API, porque a JSearch não tem
+campo de expiração —, então a coluna repetia a mesma pílula verde em todas as
+linhas.
+
+São dois caminhos para a mesma vaga, de propósito: **clicar na linha** abre a
+página de detalhe (interna, com a descrição inteira e o Rank IA), e **clicar no
+ícone** vai direto para o site do anunciante.
+
+Três cuidados no componente `LinkDaVaga`, e nenhum é enfeite:
+
+- `e.stopPropagation()` no clique. A linha inteira já abre o detalhe; sem isso
+  um clique no ícone dispararia as duas coisas — a aba externa e a página
+  interna por baixo dela.
+- `rel="noopener noreferrer"`, pelo mesmo motivo do botão da página de
+  detalhe: sem `noopener` a página aberta recebe uma referência a esta pela
+  `window.opener` e pode trocar o endereço daqui.
+- A URL chega **já saneada** de `mapear.js`. Enquanto o link só existia no
+  detalhe, atrás de um clique deliberado, o risco era teórico; dez âncoras por
+  tela montadas com URLs de terceiros que ninguém leu é outro cálculo, e um
+  `javascript:` num `href` executa ao clique. A peneira mora na origem, não na
+  tela: assim o valor perigoso nunca existe no estado, e nenhuma tela futura
+  precisa lembrar de conferir.
+
+Vaga sem link vira "—", como todo campo ausente da tabela. Um ícone morto
+prometeria uma ação que não acontece.
 
 ### Buscar dá uma página; o botão dá as seguintes
 
