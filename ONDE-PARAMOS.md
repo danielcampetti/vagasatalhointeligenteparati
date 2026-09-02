@@ -1,7 +1,149 @@
-# Onde paramos — 28/08/2026
+# Onde paramos — 02/09/2026
 
 Retomada rápida do protótipo VAGAS. O **README.md** explica *como as coisas
 funcionam*; este arquivo diz *em que pé estão* e *o que fazer a seguir*.
+
+---
+
+## 02/09 (tarde) — a espera de 27s do "Avaliando N vagas com a IA"
+
+Reclamação: a avaliação demorava demais para um sistema simples. O sistema é
+simples; **o modelo é que estava sendo mandado pensar a fundo, por um padrão
+que ninguém escolheu.**
+
+`ranking.js` montava `output_config` só com o `format` e nunca com `effort` —
+e o padrão do `claude-sonnet-5` é `high`. Medido contra a API real, mesmo lote
+de 10 vagas, três execuções cada:
+
+| effort | tempo | saída |
+|---|---|---|
+| `high` (o que rodava) | 23,6s · 26,8s · 28,4s | 2.000–2.700 tokens |
+| `medium` | 15,1s · 16,4s · 19,2s | 430–1.412 tokens |
+| `low` | 5,2s · 5,4s · 6,3s | ~440 tokens |
+
+A resposta útil são ~250 tokens em todos os casos — dez objetos
+`{ref, nota, motivo}`. **~90% do que era gerado em `high` era pensamento**, e a
+API confirma em `usage.output_tokens_details.thinking_tokens`.
+
+**Ficou `medium`**, por decisão do dono do projeto depois de ver a medição de
+qualidade. Essa medição rodou `high` **duas vezes**, para separar degradação de
+ruído:
+
+| contra o `high` | dif. média | 1º lugar | top-3 |
+|---|---|---|---|
+| `high` de novo (**ruído**) | 6,8 pts | mantido | 2/3 |
+| `medium` | 12,0 pts | trocado | 1/3 |
+| `low` | 15,5 pts | trocado | 0/3 |
+
+Verificado no app: a espera caiu de ~28s para **7,2s** e a busca de $0,0486
+para **$0,0289**. O pódio trocou (o Estágio de Infra caiu de 1º/68 para 2º/45),
+que é o desvio medido acontecendo.
+
+Só o ranking mudou. Perfil e justificativa continuam no padrão: nenhum dos dois
+é a espera que incomoda, e nenhum dos dois foi medido — mexer por simetria seria
+supor.
+
+### O susto do dashboard, e a lição
+
+O dashboard da Anthropic mostrava **~$0,08 por busca** contra os $0,049 desta
+análise. Investigado até o fim, e **não era defeito de nada**:
+
+- preço conferido na fonte oficial — `claude-sonnet-5` é $2/$10, e o aumento
+  para $3/$15 que estava marcado para 01/09/2026 **não aconteceu**;
+- `usage` despejado inteiro — sem campo escondido, cache zerado, e o cálculo do
+  `custo.js` bate ao centavo com o cálculo completo.
+
+A causa era de contabilidade: **11 chamadas de medição feitas por fora do app**
+somaram $0,43 na mesma chave — quase 40% do total. Dividir o total da chave
+pelas buscas feitas no app inflava cada busca para $0,077.
+
+**A lição vale para a próxima vez:** medição feita com a chave do projeto entra
+na fatura mesmo sem passar pelo medidor da aba Controle. Ao comparar os dois
+números, filtre por requisição, não por total.
+
+### O que ficou mapeado e não foi feito
+
+- **77% da entrada são descrições de vaga**, e o `INSTRUCAO_PADRAO` manda
+  ignorar boa parte delas. Cortar em 1.500 caracteres tira 40% da entrada.
+  **Não feito porque só medi tokens, não qualidade** — falta rodar a mesma
+  comparação de notas que o `effort` teve.
+- `JSON.stringify(x, null, 2)` gasta 356 tokens em indentação. Risco zero.
+- **A tabela espera o ranking inteiro de propósito** (`fase.js:10` já registra
+  o preço disso). Mostrar a lista assim que a JSearch responde, com a coluna
+  Rank IA carregando por linha, derrubaria a espera percebida para ~2s **sem
+  custo de qualidade nenhum**. É a mudança de maior retorno que sobrou.
+- Dois lotes de 5 **em paralelo** cortariam o tempo pela metade. A nota do
+  `ranking.js:38` rejeitou o fatiamento por mover as notas em 9,1 pontos — mas
+  agora sabemos que o ruído entre duas chamadas iguais é 6,8. A maior parte
+  daqueles 9,1 era ruído, não fatiamento; a advertência é mais fraca do que
+  parece.
+
+---
+
+## 02/09 — a janela de publicação, e o que a API não tem
+
+Duas reclamações: a busca trazia **vaga encerrada** e **vaga publicada há
+muito tempo**. Foram diagnosticadas com sete requisições reais à JSearch, não
+por leitura de código — e o diagnóstico mudou a solução.
+
+**O achado que importa: a API não tem campo de expiração.** Uni os campos das
+10 vagas de uma resposta real: são 35 nomes e nenhum é de validade. Não existe
+como perguntar se o anúncio caiu, e o `status: 'Ativa'` fixo do `mapear.js`
+não é bug — é a única coisa honesta disponível. O que existe é a correlação:
+metade do retorno vinha com `job_posted_at` nulo, sempre de agregadores que
+copiam anúncio e nunca o tiram do ar (Jobfy, Solides Vagas, Empregos Hub,
+BNE), e `date_posted=month` devolveu **zero** delas. Idade desconhecida é o
+proxy que existe, e é ele que a correção usa.
+
+**O segundo achado: `date_posted=week` não é honrado.** `today` e `3days`
+filtram de verdade (0 vagas), `month` também (10 datadas, nenhuma sem data),
+mas `week` voltou vaga de 26 dias e 5 sem data — praticamente o mesmo conjunto
+do `all`. A janela mais estreita deixou passar mais lixo que a mais larga. Por
+isso o corte acontece **duas vezes**: `date_posted` na requisição e de novo na
+tela. A tabela completa das sete medições está no README.
+
+O que entrou:
+
+- `src/janela.js`, dono do conceito inteiro — o valor que vai para a API, o
+  rótulo em português e o corte local. Vaga sem data é descartada em qualquer
+  janela que não seja "Qualquer data".
+- Dropdown na aba Vagas, **padrão "Último mês"**. Era o `all` — o que a API
+  assume quando ninguém manda `date_posted`, que era o caso — que deixava os
+  zumbis entrarem.
+- **Estreitar não gasta cota**: "Última semana" cabe no que "Último mês" já
+  baixou, então o recorte é local, sem rede e sem reavaliar com a Claude.
+  Alargar vai à rede. Daí o par `janela` (o que a tela mostra) e
+  `janelaBaixada` (o que a API atendeu) — e é a segunda que o "Carregar mais"
+  repete, porque o cursor pertence à busca que o gerou.
+- A janela entrou na chave do cache (`termo|cidade|janela`), senão trocar para
+  "Hoje" seria servido pelo resultado guardado de "Qualquer data".
+- O estado vazio passou a distinguir "a API não achou nada" de "a janela
+  escondeu tudo". Sem isso o segundo caso mentia: diria "a API não devolveu
+  resultados" depois de uma requisição que devolveu dez vagas.
+
+Verificado no app rodando, não só no vitest: a requisição sai com
+`date_posted=month`, a tela mostra 10 vagas **todas datadas** (contra 5 de 10
+sem data antes), estreitar para semana e voltar para mês custou **zero**
+requisições, e alargar para "Qualquer data" foi à rede e trouxe os 5 sem data
+de volta — com o Rank IA colocando dois deles em 2º e 3º lugar, que era
+exatamente a queixa.
+
+Testes: 171 → 177. `date_posted` foi conferido contra a API real, não deduzido
+da documentação — que, aliás, é uma página client-side que não serve o texto
+dos parâmetros.
+
+**O que ficou de fora, de propósito:** `exclude_job_publishers` funciona
+(testado: 10 → 5 vagas, a API ecoa a lista já parseada) e barraria os
+agregadores direto. Não foi ligado porque o filtro de data já derrubou todos
+eles, e bloquear publisher envelhece mal — esconde vaga boa sem avisar. Se o
+lixo voltar, o gancho é uma linha no `montarUrl`.
+
+**Achado colateral não corrigido:** `job_posted_at_timestamp` e
+`job_posted_at_datetime_utc` vieram `null` nas 10 vagas. A cadeia de três
+passos do `diasDesde()` colapsa sempre no último elo, o texto `"há 9 dias"` —
+funciona, mas o README descrevia como "ordem de confiabilidade" algo cujos
+dois primeiros elos nunca chegam. O README foi corrigido; o código não mudou,
+porque a cadeia continua certa se a API voltar a mandar os campos.
 
 > **Revisado em 27/08/2026.** Cada afirmação abaixo foi conferida contra o
 > código — `wc -l`, `npm test`, `git log` — não contra a memória. Este arquivo

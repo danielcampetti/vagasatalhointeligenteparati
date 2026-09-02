@@ -179,7 +179,8 @@ Vaga Inteligente virar o caminho principal, vale medir também.
 
 A API é a **OpenWeb Ninja** (`api.openwebninja.com/jsearch/search-v2`), com os
 parâmetros fixos `country=br`, `language=pt`, `num_pages=1`. A consulta é montada
-como `"<cargo> em <cidade>"`.
+como `"<cargo> em <cidade>"`, e a janela de publicação vai em `date_posted`
+(veja "A janela de publicação", abaixo).
 
 O mapeamento está em `src/api/mapear.js`, e a regra ali é **não inventar**:
 campo ausente vira `null` e a tela mostra "—". Preencher com um valor plausível
@@ -189,7 +190,7 @@ faria a tabela mentir sobre o que a busca trouxe.
 |---|---|
 | Cargo, Empresa | `job_title`, `employer_name` |
 | Localização | `job_city` + `job_state`, com fallback para `job_location` e "Remoto" |
-| Publicada | cadeia de três: `job_posted_at_timestamp`, `job_posted_at_datetime_utc`, e por último o texto `job_posted_at` ("7 days ago"), que em algumas respostas é o único presente |
+| Publicada | cadeia de três: `job_posted_at_timestamp`, `job_posted_at_datetime_utc`, e por último o texto `job_posted_at` ("há 7 dias"). **Na prática só o terceiro chega**: numa resposta real de 10 vagas os dois primeiros vieram `null` nas dez, e o texto veio em cinco. As outras cinco ficam com data desconhecida — e é sobre elas que a janela de publicação age |
 | Salário | `job_min_salary`/`job_max_salary` — **frequentemente vazios**. Valor anual é descartado em vez de virar "R$ 60 mil por mês" |
 | Modalidade | `work_arrangement` (`remote` / `onsite` / `hybrid`) → Remoto, Presencial, Híbrido |
 | Link | `job_apply_link`, com `apply_options[0].apply_link` de reserva |
@@ -231,6 +232,96 @@ GitHub Pages exige para SPAs.
 > colunas inteiras vazias em toda busca. O `mapearVagas` agora imprime no
 > console os campos da primeira vaga de cada resposta — custa zero requisição e
 > mostra a forma real.
+
+### A janela de publicação
+
+O dropdown ao lado da cidade — Hoje / Últimos 3 dias / Última semana / Último
+mês / Qualquer data. O padrão é **Último mês**, e essa escolha corrigiu dois
+defeitos reclamados: vaga já encerrada e vaga publicada há muito tempo.
+
+O diagnóstico saiu de sete requisições reais em 2026-09-02, mesma consulta
+("Técnico de TI em Caxias do Sul, RS"), variando só o `date_posted`:
+
+| `date_posted` | vagas | idades | sem data |
+|---|---|---|---|
+| *(não enviado)* | 10 | 9, 20, 21, 22, 26 dias | **5** |
+| `all` | 10 | idem | **5** |
+| `today` | 0 | — | — |
+| `3days` | 0 | — | — |
+| `week` | 10 | 9, 21, 22, 26 dias | **5** |
+| `month` | 10 | 9 a 27 dias | **0** |
+
+Duas coisas a saber antes de mexer aqui:
+
+**A API não tem campo de expiração.** A união dos campos das 10 vagas dá 35
+nomes e nenhum é de validade — não dá para perguntar se o anúncio caiu. O que
+existe é a correlação: as vagas sem `job_posted_at` vinham de agregadores que
+copiam anúncio e nunca o tiram do ar, e `date_posted=month` devolveu zero
+delas. Por isso **idade desconhecida é descartada** em qualquer janela que não
+seja "Qualquer data". Era o `all` — que é o que a API assume quando ninguém
+manda `date_posted` — que deixava os zumbis entrarem.
+
+**`week` não é honrado.** Repare na tabela: a janela mais estreita deixou
+passar mais coisa velha que a mais larga. Por isso o corte acontece duas vezes
+— `date_posted` na requisição e de novo na tela (`src/janela.js`). Sem o
+segundo, "Última semana" seria uma promessa que a API não cumpre.
+
+**Estreitar não gasta cota.** "Última semana" é subconjunto do que "Último mês"
+já baixou, então apertar o dropdown filtra em memória — sem rede e sem
+reavaliar com a Claude. Alargar precisa de requisição, porque o que ficou de
+fora nunca foi baixado. Quem decide é o `cabeNoQueJaTemos`, e a distinção entre
+"o recorte que a tela mostra" e "o recorte que a API atendeu" é o par
+`janela` / `janelaBaixada` no `App.jsx` — é `janelaBaixada` que o "Carregar
+mais" repete, porque o cursor pertence à busca que o gerou.
+
+A janela entra na **chave do cache** (`termo|cidade|janela`). Sem isso, trocar
+para "Hoje" seria servido pelo resultado guardado de "Qualquer data" — o filtro
+pareceria quebrado quando era o cache respondendo pela pergunta errada.
+
+A aba Vaga Inteligente não tem dropdown (o cargo dela sai do currículo), mas usa
+a mesma janela padrão e o mesmo corte local: sem isso ela poderia destacar como
+"a melhor vaga" um anúncio sem data — e, medido, o Rank IA chegou a colocar dois
+desses em 2º e 3º lugar.
+
+O Banco de Dados **não** é recortado por data: ele é acervo, e esconder o
+histórico por "última semana" apagaria o que ele existe para guardar.
+
+### Quanto uma avaliação custa, e por quê
+
+Uma busca dispara **uma** chamada à Claude para o lote inteiro (`TAMANHO_LOTE`
+é 30; a JSearch devolve ~10). A anatomia dessa chamada, medida com
+`count_tokens`:
+
+| camada | tokens | |
+|---|---|---|
+| esqueleto + schema | 480 | 3,9% |
+| system (a instrução de avaliação) | 566 | 4,6% |
+| perfil do candidato | 420 | 3,4% |
+| metadados das 10 vagas | 1.342 | 10,9% |
+| **descrições das 10 vagas** | **9.505** | **77,2%** |
+| **total de entrada** | **12.313** | |
+
+A saída são ~250 tokens de JSON útil. O resto é pensamento — a API confirma o
+número em `usage.output_tokens_details.thinking_tokens`.
+
+A `$2/MTok` de entrada e `$10/MTok` de saída (`claude-sonnet-5`), isso dá
+**~$0,029 por busca** em `effort: medium`, contra ~$0,049 no `high` que era o
+padrão implícito. Cerca de 170 buscas até o teto de US$ 5.
+
+Duas coisas ficam claras na tabela e valem como próximos cortes:
+
+- **77% da entrada é descrição de vaga**, e boa parte dela é texto que a
+  própria `INSTRUCAO_PADRAO` manda ignorar ("Desconsidere prestígio da
+  empresa, nome de mercado e texto promocional"). Uma descrição medida tinha
+  6.561 caracteres terminando em política de uniforme, escala de turno e pausa
+  para o cafezinho. Cortar em 1.500 caracteres tiraria **40% da entrada** —
+  mas ainda **não foi medido contra a qualidade da nota**, então não foi feito.
+- `JSON.stringify(x, null, 2)` gasta **356 tokens só em indentação**.
+
+> **O medidor da aba Controle conta só o que o app gastou.** Chamadas feitas
+> fora dele — um script de teste com a mesma chave, por exemplo — aparecem na
+> fatura da Anthropic e não aqui. Ao comparar os dois números, confira o
+> período e a origem antes de concluir que um deles está errado.
 
 ## A aba Controle e a cota da API
 
@@ -351,6 +442,7 @@ src/
   App.jsx           # a página inteira (uma tela só, sem router — abas em estado local)
   index.css         # Tailwind + tokens do tema + estilos base
   cota.js           # contagem da cota da API + cache, no localStorage
+  janela.js         # a janela de publicação: date_posted + o corte local
   api/jsearch.js    # a chamada de rede e os erros traduzidos
   api/mapear.js     # resposta da JSearch -> a forma de vaga da tabela
   data/vagas.js     # ⬅️ os dados mockados: é aqui que se edita o conteúdo
