@@ -5,6 +5,51 @@ funcionam*; este arquivo diz *em que pé estão* e *o que fazer a seguir*.
 
 ---
 
+## 02/09 (noite, 2) — Buscar devolvia 27 vagas
+
+Relatado: clicar em Buscar trouxe 27 vagas em vez de 10.
+
+Não era a API (`num_pages` segue 1, e as sete requisições de diagnóstico da
+manhã sempre voltaram 10). Era o cache. `carregarMais` grava a lista
+**acumulada** sob a mesma chave da busca — o que é correto, senão a próxima
+repetição perderia as páginas já pagas —, e `buscar()` fazia
+`setBanco(guardado.vagas)` sem olhar o tamanho. As 27 eram três páginas de uma
+sessão anterior voltando juntas.
+
+Agravante: elas iam inteiras para a Claude (`ranquearBanco(guardado.vagas)`).
+Uma busca que não gastava nenhuma das 200 custava ~US$ 0,06.
+
+### O que ficou
+
+A entrada de cache passou a registrar as fronteiras das páginas (`paginas`), e
+`cota.js` ganhou `paginasDoCache` e `proximaPagina`. Buscar restaura a
+primeira; o botão serve as seguintes **do cache, sem rede** — elas já custaram
+uma requisição cada, e descartá-las faria o próximo clique pagar de novo.
+
+Também entrou `ranquearPendentes`: só as vagas sem nota vão para a Claude,
+ancoradas nas que já têm. Uma página que volta do cache já pontuada não custa
+nada.
+
+Verificado no app, com uma entrada de cache **legada** (gravada antes de
+`paginas` existir, o que exercita o fallback junto):
+
+- Buscar: "Mostrando 1 a 10 de 10" — eram 15 — e **zero chamadas à Claude**,
+  porque as 10 voltaram já pontuadas;
+- Carregar mais: serviu as 5 guardadas com **zero requisições JSearch**
+  (contador do proxy: 13 antes, 13 depois) e uma chamada Claude só para as 5
+  sem nota;
+- o texto embaixo do botão trocou sozinho de "sai do cache, sem consumir
+  requisição" para "Consome 1 das 200" quando o cache acabou.
+
+Detalhe de forma: a memo que decide se há página no cache lê o `cota` que já
+está em estado, não o `localStorage`. Ler storage dentro do render funcionava,
+mas escondia a dependência do linter — e a dependência é real, porque
+`setCota(registrarUso(...))` é o que precisa disparar a reavaliação.
+
+Testes: 186 -> 194.
+
+---
+
 ## 02/09 (noite) — "Carregar mais" reenviava tudo
 
 Suspeita levantada pelo gasto na API, e estava certa: `carregarMais` terminava

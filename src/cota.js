@@ -65,6 +65,70 @@ export function chaveDaConsulta(termo, cidade, janela = JANELA_PADRAO) {
   return `${t}|${c}|${janela}`
 }
 
+/**
+ * Tamanho de página assumido para entradas gravadas antes de `paginas`
+ * existir. Não é adivinhação de qual era a página real — é o que impede uma
+ * entrada legada de 27 vagas voltar inteira, que é justamente o defeito que
+ * `paginas` veio corrigir. O erro possível é servir 10 num clique onde a
+ * página original tinha 7; o erro que ele evita é a busca devolver três
+ * páginas de uma vez.
+ */
+export const PAGINA_LEGADA = 10
+
+/**
+ * Os tamanhos das páginas guardadas nesta entrada, em ordem.
+ *
+ * `carregarMais` grava a lista **acumulada** sob a mesma chave da busca — do
+ * contrário a próxima repetição perderia o que já foi baixado e pago. O preço
+ * disso, até este campo existir, era `buscar()` restaurar tudo: quem tinha
+ * clicado "Carregar mais" três vezes numa sessão anterior clicava em Buscar e
+ * recebia 27 vagas de uma vez, e as 27 iam para a Claude juntas.
+ *
+ * Com as fronteiras registradas, a busca restaura a primeira página e o botão
+ * serve as seguintes — sem rede, porque elas já custaram uma requisição cada.
+ *
+ * Uma soma que não fecha com `vagas.length` é tratada como ausente: `paginas`
+ * só serve para fatiar essa lista, e um par inconsistente serviria vaga
+ * repetida ou pularia vaga.
+ */
+export function paginasDoCache(entrada) {
+  const vagas = Array.isArray(entrada?.vagas) ? entrada.vagas : null
+  if (!vagas) return []
+
+  const guardadas = entrada.paginas
+  const valido =
+    Array.isArray(guardadas) &&
+    guardadas.length > 0 &&
+    guardadas.every((n) => Number.isInteger(n) && n > 0) &&
+    guardadas.reduce((a, b) => a + b, 0) === vagas.length
+  if (valido) return guardadas
+
+  const fatias = []
+  for (let i = 0; i < vagas.length; i += PAGINA_LEGADA) {
+    fatias.push(Math.min(PAGINA_LEGADA, vagas.length - i))
+  }
+  return fatias
+}
+
+/**
+ * A próxima página guardada, para quem já mostra `jaMostradas` vagas — ou
+ * `null` quando o cache acabou e só a rede tem mais.
+ *
+ * `jaMostradas` precisa cair exatamente numa fronteira de página. Fora dela a
+ * função devolve `null` em vez de fatiar por conta própria: a tela e o cache
+ * teriam divergido (uma vaga arquivada, por exemplo), e uma fatia arbitrária
+ * daria vaga repetida ou vaga pulada — os dois piores que uma requisição.
+ */
+export function proximaPagina(entrada, jaMostradas) {
+  const paginas = paginasDoCache(entrada)
+  let inicio = 0
+  for (const tamanho of paginas) {
+    if (inicio === jaMostradas) return entrada.vagas.slice(inicio, inicio + tamanho)
+    inicio += tamanho
+  }
+  return null
+}
+
 /** Quantas consultas o cache guarda. Cada uma carrega as vagas inteiras, com
  *  descrição — o localStorage tem uns 5 MB e não vale enchê-lo de histórico. */
 const TETO_CACHE = 20
@@ -103,7 +167,7 @@ export function registrarUso(
   termo,
   cidade,
   origem,
-  { vagas = null, cursor = null, janela = JANELA_PADRAO } = {},
+  { vagas = null, cursor = null, janela = JANELA_PADRAO, paginas = null } = {},
   agora = new Date(),
 ) {
   const chave = chaveDaConsulta(termo, cidade, janela)
@@ -119,7 +183,7 @@ export function registrarUso(
     // busca devolveria tudo o que já foi carregado mas perderia o direito de
     // pedir a próxima página, e o botão "Carregar mais" sumiria sem motivo
     // visível. `null` aqui significa última página, e é diferente de ausente.
-    cache = { ...cache, [chave]: { quando, vagas, cursor } }
+    cache = { ...cache, [chave]: { quando, vagas, cursor, paginas } }
     // Descarta as entradas mais antigas quando passa do teto.
     const chaves = Object.keys(cache)
     if (chaves.length > TETO_CACHE) {

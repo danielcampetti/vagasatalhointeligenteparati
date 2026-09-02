@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, test } from 'vitest'
-import { consultarCache, limparCache, registrarUso } from './cota'
+import {
+  PAGINA_LEGADA,
+  consultarCache,
+  limparCache,
+  paginasDoCache,
+  proximaPagina,
+  registrarUso,
+} from './cota'
 import { JANELA_PADRAO } from './janela'
 
 beforeEach(() => localStorage.clear())
@@ -85,5 +92,85 @@ describe('cache por janela de publicação', () => {
   test('sem janela explícita, guardar e consultar caem na mesma chave padrão', () => {
     registrarUso('x', 'y', 'rede', { vagas: VAGAS })
     expect(consultarCache('x', 'y', JANELA_PADRAO).vagas).toEqual(VAGAS)
+  })
+})
+
+
+/**
+ * O cache guarda páginas, não uma lista solta.
+ *
+ * Defeito que motivou isto: `carregarMais` gravava a lista **acumulada** sob a
+ * mesma chave da busca, e `buscar()` a restaurava inteira. Quem tinha clicado
+ * "Carregar mais" três vezes numa sessão anterior clicava em Buscar e recebia
+ * 27 vagas de uma vez — sem gastar cota, mas contra o que o botão promete, e
+ * mandando as 27 para a Claude de uma vez.
+ *
+ * As páginas seguintes não são descartadas: elas já custaram uma requisição
+ * cada, e jogá-las fora faria o próximo "Carregar mais" pagar de novo por algo
+ * já baixado.
+ */
+describe('cache paginado', () => {
+  const vagas = (n, base = 0) =>
+    Array.from({ length: n }, (_, i) => ({ id: `v${base + i}` }))
+
+  test('a busca grava a primeira página', () => {
+    registrarUso('x', 'y', 'rede', { vagas: vagas(10), paginas: [10] })
+    expect(paginasDoCache(consultarCache('x', 'y'))).toEqual([10])
+  })
+
+  test('carregar mais acrescenta o tamanho da página nova', () => {
+    registrarUso('x', 'y', 'rede', { vagas: vagas(10), paginas: [10] })
+    registrarUso('x', 'y', 'rede', { vagas: vagas(15), paginas: [10, 5] })
+    expect(paginasDoCache(consultarCache('x', 'y'))).toEqual([10, 5])
+  })
+
+  // O caso do defeito: 15 guardadas, mas Buscar mostra 10.
+  test('a primeira página é o que Buscar restaura, não a lista toda', () => {
+    registrarUso('x', 'y', 'rede', { vagas: vagas(15), paginas: [10, 5] })
+    const entrada = consultarCache('x', 'y')
+    expect(entrada.vagas).toHaveLength(15) // o resto continua guardado
+    expect(paginasDoCache(entrada)[0]).toBe(10)
+  })
+
+  test('o botão serve a próxima página do cache, sem rede', () => {
+    registrarUso('x', 'y', 'rede', { vagas: vagas(15), paginas: [10, 5] })
+    const entrada = consultarCache('x', 'y')
+    const proxima = proximaPagina(entrada, 10)
+    expect(proxima).toHaveLength(5)
+    expect(proxima[0].id).toBe('v10')
+  })
+
+  // Cache esgotado: é aqui que a rede volta a ser necessária.
+  test('sem página guardada além do que já está na tela, devolve null', () => {
+    registrarUso('x', 'y', 'rede', { vagas: vagas(15), paginas: [10, 5] })
+    expect(proximaPagina(consultarCache('x', 'y'), 15)).toBe(null)
+  })
+
+  // Uma tela com 12 vagas não bate com nenhuma fronteira de página guardada.
+  // Servir uma fatia arbitrária dali daria vaga repetida ou vaga pulada.
+  test('posição que não cai numa fronteira de página não serve nada', () => {
+    registrarUso('x', 'y', 'rede', { vagas: vagas(15), paginas: [10, 5] })
+    expect(proximaPagina(consultarCache('x', 'y'), 12)).toBe(null)
+  })
+
+  // Entradas gravadas antes deste formato não têm `paginas`. Sem um valor
+  // aqui elas voltariam inteiras — que é exatamente o defeito.
+  test('entrada legada é fatiada, e não devolvida inteira', () => {
+    localStorage.setItem(
+      'vagas:cota',
+      JSON.stringify({
+        desde: null,
+        usos: [],
+        cache: { 'x|y|month': { quando: 'z', vagas: vagas(27), cursor: null } },
+      }),
+    )
+    const paginas = paginasDoCache(consultarCache('x', 'y', 'month'))
+    expect(paginas[0]).toBe(PAGINA_LEGADA)
+    expect(paginas.reduce((a, b) => a + b, 0)).toBe(27)
+  })
+
+  test('entrada ausente ou torta não quebra', () => {
+    expect(paginasDoCache(null)).toEqual([])
+    expect(proximaPagina(null, 0)).toBe(null)
   })
 })

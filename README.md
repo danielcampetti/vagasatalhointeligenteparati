@@ -318,6 +318,27 @@ Duas coisas ficam claras na tabela e valem como próximos cortes:
   mas ainda **não foi medido contra a qualidade da nota**, então não foi feito.
 - `JSON.stringify(x, null, 2)` gasta **356 tokens só em indentação**.
 
+### Buscar dá uma página; o botão dá as seguintes
+
+O cache guarda a lista **acumulada** sob a mesma chave da busca — necessário,
+senão repetir a consulta perderia as páginas já baixadas e pagas. Durante um
+tempo `buscar()` restaurava essa lista inteira, e quem tinha clicado "Carregar
+mais" três vezes numa sessão anterior clicava em Buscar e recebia 27 vagas de
+uma vez. Sem gastar cota, mas contra o que o botão promete — e as 27 iam para
+a Claude juntas, o que fazia uma busca "de graça" custar ~US$ 0,06.
+
+Agora a entrada de cache registra as **fronteiras das páginas** (`paginas`),
+`buscar()` restaura só a primeira, e o botão serve as seguintes direto do
+cache, sem tocar a rede. Só quando o cache acaba é que ele volta a gastar uma
+das 200 — e o texto embaixo do botão diz qual dos dois casos é.
+
+Vaga que volta do cache já pontuada não é reavaliada: `ranquearPendentes` manda
+para a Claude só as que estão sem nota, ancoradas nas que têm.
+
+Entradas gravadas antes de `paginas` existir são fatiadas em `PAGINA_LEGADA`
+(10). Não é adivinhação do tamanho real da página original — é o que impede
+uma entrada legada de 27 vagas voltar inteira.
+
 ### "Carregar mais" manda só as vagas novas
 
 Cada clique traz uma página nova da JSearch e a acrescenta à lista. Durante um

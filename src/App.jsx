@@ -2,7 +2,10 @@ import { useEffect, useMemo, useState } from 'react'
 import { BANCO_DE_VAGAS, INSTRUCAO_PADRAO, MODALIDADES } from './data/vagas'
 import {
   LIMITE_MENSAL,
+  chaveDaConsulta,
   consultarCache,
+  paginasDoCache,
+  proximaPagina,
   lerCota,
   limparCache,
   registrarUso,
@@ -2752,6 +2755,25 @@ export default function App() {
     [dentroDaJanela, ordem, direcao],
   )
 
+  /**
+   * A próxima página que o cache já tem, ou `null` quando só a rede tem mais.
+   *
+   * Ela existe porque `buscar()` restaura só a primeira página: as seguintes
+   * já custaram uma requisição cada e continuam guardadas, então o botão as
+   * serve antes de gastar cota de novo.
+   *
+   * Lê o cache de dentro do `cota` que já está em estado, e não do
+   * `localStorage`: `setCota(registrarUso(...))` devolve a cota atualizada,
+   * então esta memo reavalia sozinha depois de cada gravação — e a
+   * dependência fica honesta em vez de um acesso a storage escondido dentro
+   * do render.
+   */
+  const paginaNoCache = useMemo(() => {
+    if (aba !== 'vagas' || !consultaFeita) return null
+    const chave = chaveDaConsulta(cargo.trim(), cidade.trim(), janelaBaixada)
+    return proximaPagina(chave ? cota.cache?.[chave] : null, banco.length)
+  }, [aba, consultaFeita, cargo, cidade, janelaBaixada, banco.length, cota])
+
   const total = filtradas.length
   const maxPagina = Math.max(1, Math.ceil(total / porPagina))
   const paginaAtual = Math.min(pagina, maxPagina)
@@ -2857,14 +2879,20 @@ export default function App() {
 
     const guardado = consultarCache(termo, cidadeAlvo, janelaAlvo)
     if (guardado) {
+      // **Só a primeira página.** O `carregarMais` grava a lista acumulada
+      // sob esta mesma chave — necessário, senão a repetição perderia o que
+      // já foi baixado e pago —, e restaurar tudo fazia "Buscar" devolver
+      // três páginas de uma vez para quem tinha paginado numa sessão
+      // anterior. As seguintes continuam guardadas e saem pelo botão.
+      const primeira = proximaPagina(guardado, 0) ?? guardado.vagas
       setJanelaBaixada(janelaAlvo)
-      setBanco(guardado.vagas)
+      setBanco(primeira)
       // Sem restaurar o cursor, repetir a busca traria as vagas de volta e o
       // botão de carregar mais sumiria — como se a consulta tivesse acabado.
       setCursor(guardado.cursor ?? null)
       setCota(registrarUso(termo, cidadeAlvo, 'cache', { janela: janelaAlvo }))
       setConsultaFeita(true)
-      await ranquearBanco(guardado.vagas)
+      await ranquearPendentes(primeira)
       return
     }
 
@@ -2886,6 +2914,9 @@ export default function App() {
           vagas,
           cursor: proximo,
           janela: janelaAlvo,
+          // A busca é sempre uma página. É esta fronteira que o "Buscar" de
+          // amanhã usa para não devolver a lista acumulada inteira.
+          paginas: vagas.length ? [vagas.length] : null,
         }),
       )
       setConsultaFeita(true)
@@ -2928,15 +2959,31 @@ export default function App() {
    * continua sendo uma chamada só enquanto a lista couber em TAMANHO_LOTE.
    */
   async function carregarMais() {
-    // `cursor` nulo é a última página. O botão nem aparece nesse caso; a
-    // guarda existe para o clique que escapa entre o estado e o render.
-    if (buscando || ranqueando || carregandoMais || !cursor) return
+    if (buscando || ranqueando || carregandoMais) return
 
     const termo = cargo.trim()
     const cidadeAlvo = cidade.trim()
 
     setErroBusca(null)
     setErroRanking(null)
+
+    // Página que já foi baixada e paga numa sessão anterior: sai do cache,
+    // sem tocar a rede. Só as que ainda não têm nota vão para a Claude — uma
+    // página que volta já pontuada não custa nada.
+    if (paginaNoCache) {
+      const doCache = paginaNoCache
+      setBanco((atual) => [...atual, ...doCache])
+      setCota(
+        registrarUso(termo, cidadeAlvo, 'cache', { janela: janelaBaixada }),
+      )
+      await ranquearPendentes(doCache, banco)
+      return
+    }
+
+    // `cursor` nulo é a última página. O botão nem aparece nesse caso; a
+    // guarda existe para o clique que escapa entre o estado e o render.
+    if (!cursor) return
+
     setCarregandoMais(true)
 
     let listaCompleta = null
@@ -2962,11 +3009,19 @@ export default function App() {
 
       setBanco(listaCompleta)
       setCursor(proximo)
+      // A fronteira da página nova entra na lista de fronteiras. Página que
+      // só trouxe repetidas não vira fronteira: um tamanho zero não é página,
+      // e faria `proximaPagina` servir uma fatia vazia para sempre.
+      const entradaAtual = consultarCache(termo, cidadeAlvo, janelaBaixada)
+      const paginasAtuais = paginasDoCache(entradaAtual)
       setCota(
         registrarUso(termo, cidadeAlvo, 'rede', {
           vagas: listaCompleta,
           cursor: proximo,
           janela: janelaBaixada,
+          paginas: apenasNovas.length
+            ? [...paginasAtuais, apenasNovas.length]
+            : paginasAtuais,
         }),
       )
     } catch (err) {
@@ -3031,6 +3086,20 @@ export default function App() {
    * devolveu, que custaram uma das 200 requisições mensais, e um aviso aparece
    * acima da tabela sem tirá-las da tela.
    */
+  /**
+   * Ranqueia só as vagas que ainda não têm nota, ancoradas nas que têm.
+   *
+   * Serve a página que volta do cache: ela pode chegar já pontuada de uma
+   * sessão anterior, e nesse caso não há o que perguntar à Claude. Antes o
+   * caminho do cache reranqueava tudo — uma busca "de graça" em cota custava
+   * ~US$ 0,06 de Claude.
+   */
+  async function ranquearPendentes(lista, ancora = []) {
+    const semNota = lista.filter((v) => v.rank == null)
+    if (!semNota.length) return
+    await ranquearBanco(semNota, [...ancora, ...lista.filter((v) => v.rank != null)])
+  }
+
   async function ranquearBanco(vagas, jaAvaliadas = []) {
     const perfil = perfilEfetivo(cv)
     if (!perfil || vagas.length === 0) return
@@ -3460,7 +3529,7 @@ export default function App() {
                     inerte: "acabaram as vagas" é informação, botão morto não.
                     O custo vai escrito no próprio botão — ele gasta a cota
                     escassa, e nenhum clique aqui deve ser surpresa. */}
-                {aba === 'vagas' && cursor && (
+                {aba === 'vagas' && (cursor || paginaNoCache) && (
                   <div
                     style={{
                       display: 'flex',
@@ -3500,8 +3569,9 @@ export default function App() {
                           : 'Carregar mais vagas'}
                     </button>
                     <div style={{ fontSize: 12, color: '#7C8699' }}>
-                      Consome 1 das 200 requisições do mês e avalia com a IA
-                      só as vagas novas (~US$ 0,03).
+                      {paginaNoCache
+                        ? 'Esta página já foi baixada antes: sai do cache, sem consumir requisição.'
+                        : 'Consome 1 das 200 requisições do mês e avalia com a IA só as vagas novas (~US$ 0,03).'}
                     </div>
                   </div>
                 )}
