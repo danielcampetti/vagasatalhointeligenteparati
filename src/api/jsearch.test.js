@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import { PARAMS_FIXOS, cursorDaResposta, montarUrl } from './jsearch'
+import { JANELA_PADRAO } from '../janela'
 
 // Primeiro teste deste módulo. Ele nasceu junto com a paginação por cursor:
 // até aqui o `jsearch.js` só sabia pedir a primeira página, e a única coisa
@@ -27,6 +28,44 @@ describe('montarUrl', () => {
       const params = new URLSearchParams(montarUrl('x', vazio).split('?')[1])
       expect(params.has('cursor')).toBe(false)
     }
+  })
+})
+
+/**
+ * A busca não mandava `date_posted` nenhum, o que na API equivale a `all` —
+ * e `all` foi medido como a origem dos dois defeitos: metade do retorno vinha
+ * sem data de publicação, e era essa metade que trazia anúncio já encerrado.
+ * Com `date_posted=month`, a mesma consulta voltou 10 vagas todas datadas.
+ */
+describe('montarUrl: janela de publicação', () => {
+  const paramsDe = (url) => new URLSearchParams(url.split('?')[1])
+
+  test('sem janela explícita manda o padrão, não deixa a API decidir', () => {
+    expect(paramsDe(montarUrl('x')).get('date_posted')).toBe(JANELA_PADRAO)
+  })
+
+  test('a janela escolhida é o que vai para a API', () => {
+    expect(paramsDe(montarUrl('x', null, 'week')).get('date_posted')).toBe('week')
+  })
+
+  // 'Qualquer data' é uma escolha, não uma ausência: mandar `all` explícito
+  // deixa a intenção legível no log do proxy e no `parameters` da resposta.
+  test('qualquer data manda date_posted=all, e não omite o parâmetro', () => {
+    expect(paramsDe(montarUrl('x', null, 'all')).get('date_posted')).toBe('all')
+  })
+
+  // Uma janela vinda do localStorage de uma versão anterior não pode virar
+  // `date_posted=ontem`: a API recusaria com 400 e a requisição malformada
+  // debitaria uma das 200 do mês igual.
+  test('janela desconhecida cai no padrão em vez de ir torta para a API', () => {
+    const params = paramsDe(montarUrl('x', null, 'ontem-a-noite'))
+    expect(params.get('date_posted')).toBe(JANELA_PADRAO)
+  })
+
+  test('janela e cursor convivem: carregar mais não perde o recorte', () => {
+    const params = paramsDe(montarUrl('x', 'CURSOR9', 'week'))
+    expect(params.get('cursor')).toBe('CURSOR9')
+    expect(params.get('date_posted')).toBe('week')
   })
 })
 

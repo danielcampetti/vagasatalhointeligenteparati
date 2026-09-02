@@ -10,6 +10,8 @@
  * até existir um endpoint de produção que guarde a chave fora do navegador.
  */
 
+import { JANELAS, JANELA_PADRAO } from '../janela'
+
 const ENDPOINT = '/api/jsearch/search-v2'
 
 /** Fixos por enquanto: o app busca vagas brasileiras, em português. */
@@ -49,9 +51,23 @@ const MENSAGENS = {
  *
  * Cursor vazio não vira parâmetro: `cursor=` seria pedir a próxima página de
  * nada, e uma requisição malformada debita uma das 200 do mês igual.
+ *
+ * `janela` vira `date_posted`. Antes o parâmetro não era enviado, o que para
+ * a API é o mesmo que `all` — e `all` foi medido como a origem dos dois
+ * defeitos que a busca tinha: metade das vagas voltava sem data de
+ * publicação, e era essa metade que trazia anúncio já encerrado. O padrão
+ * agora é `month`, que na mesma consulta devolveu 10 vagas todas datadas.
+ *
+ * Valor desconhecido cai no padrão em vez de seguir para a API: `date_posted`
+ * inválido é 400, e um 400 debita cota igual.
  */
-export function montarUrl(consulta, cursor = null) {
-  const params = new URLSearchParams({ query: consulta, ...PARAMS_FIXOS })
+export function montarUrl(consulta, cursor = null, janela = JANELA_PADRAO) {
+  const conhecida = JANELAS.some((j) => j.valor === janela)
+  const params = new URLSearchParams({
+    query: consulta,
+    ...PARAMS_FIXOS,
+    date_posted: conhecida ? janela : JANELA_PADRAO,
+  })
   if (cursor) params.set('cursor', cursor)
   return `${ENDPOINT}?${params.toString()}`
 }
@@ -89,8 +105,12 @@ export function vagasDaResposta(bruto) {
   return Array.isArray(lista) ? lista : []
 }
 
-export async function buscarVagas(consulta, cursor = null) {
-  const url = montarUrl(consulta, cursor)
+export async function buscarVagas(
+  consulta,
+  cursor = null,
+  janela = JANELA_PADRAO,
+) {
+  const url = montarUrl(consulta, cursor, janela)
 
   let res
   try {

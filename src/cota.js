@@ -14,6 +14,8 @@
  * pode quebrar por causa do contador — no pior caso ele volta a zero.
  */
 
+import { JANELA_PADRAO } from './janela'
+
 export const LIMITE_MENSAL = 200
 
 const CHAVE = 'vagas:cota'
@@ -48,12 +50,19 @@ function gravar(cota) {
   return cota
 }
 
-/** A consulta que identifica uma requisição. Vazia dos dois lados = nenhuma. */
-export function chaveDaConsulta(termo, cidade) {
+/**
+ * A consulta que identifica uma requisição. Vazia dos dois lados = nenhuma.
+ *
+ * A janela de publicação entra na chave porque ela muda o que a API devolve:
+ * sem ela aqui, trocar o dropdown para "Hoje" depois de uma busca em
+ * "Qualquer data" seria servido pelo cache da consulta larga — o filtro
+ * pareceria quebrado quando era o cache respondendo pela pergunta errada.
+ */
+export function chaveDaConsulta(termo, cidade, janela = JANELA_PADRAO) {
   const t = termo.trim()
   const c = cidade.trim()
   if (!t && !c) return null
-  return `${t}|${c}`
+  return `${t}|${c}|${janela}`
 }
 
 /** Quantas consultas o cache guarda. Cada uma carrega as vagas inteiras, com
@@ -68,8 +77,8 @@ const TETO_CACHE = 20
  * API** quando há cache — antes o cache só contabilizava, agora ele evita a
  * requisição, que era o ponto.
  */
-export function consultarCache(termo, cidade) {
-  const chave = chaveDaConsulta(termo, cidade)
+export function consultarCache(termo, cidade, janela = JANELA_PADRAO) {
+  const chave = chaveDaConsulta(termo, cidade, janela)
   if (!chave) return null
   const entrada = lerCota().cache[chave]
   if (!entrada || !Array.isArray(entrada.vagas)) return null
@@ -94,10 +103,10 @@ export function registrarUso(
   termo,
   cidade,
   origem,
-  { vagas = null, cursor = null } = {},
+  { vagas = null, cursor = null, janela = JANELA_PADRAO } = {},
   agora = new Date(),
 ) {
-  const chave = chaveDaConsulta(termo, cidade)
+  const chave = chaveDaConsulta(termo, cidade, janela)
   if (!chave) return lerCota()
 
   const cota = lerCota()
@@ -126,7 +135,14 @@ export function registrarUso(
   return gravar({
     desde: cota.desde ?? quando,
     usos: [
-      { chave, termo: termo.trim(), cidade: cidade.trim(), quando, origem },
+      {
+        chave,
+        termo: termo.trim(),
+        cidade: cidade.trim(),
+        janela,
+        quando,
+        origem,
+      },
       ...cota.usos,
     ].slice(0, 50), // o histórico da tela mostra as últimas; não é um log
     cache,

@@ -25,6 +25,13 @@ import { definirInstrucao, lerCurriculo, perfilEfetivo } from './curriculo'
 import { dolares, lerCusto, zerarCusto } from './custo'
 import { acharVaga } from './detalhe'
 import { faseDaBusca } from './fase'
+import {
+  JANELAS,
+  JANELA_PADRAO,
+  cabeNoQueJaTemos,
+  filtrarPorJanela,
+  janelaDe,
+} from './janela'
 import CampoCidade from './paineis/CampoCidade'
 import { AvisoErro, Carregando } from './paineis/comuns'
 import PainelIA from './paineis/PainelIA'
@@ -788,14 +795,23 @@ function Cabecalho({ aba }) {
  * busca vai precisar ter quando o clique disparar uma API — assíncrona, com
  * carregamento e erro.
  *
- * É o único controle da tela: não há filtro nenhum sobre o resultado. A aba
- * Banco de Dados não tem este bloco — ela lista o acervo direto.
+ * A janela de publicação é o terceiro campo, e é o único que também recorta o
+ * resultado depois que ele chega — `date_posted` na requisição e um segundo
+ * corte local, porque a API aceita a janela e nem sempre a cumpre (ver
+ * `janela.js`). Ela é deferida como os outros dois: trocar o dropdown não
+ * refaz a busca sozinho, porque uma janela mais larga precisa de requisição
+ * nova e requisição custa cota.
+ *
+ * A aba Banco de Dados não tem este bloco — ela lista o acervo direto, e o
+ * acervo não é recortado por data.
  */
 function ConsultaDestaque({
   cargo,
   cidade,
+  janela,
   onCargo,
   onCidade,
+  onJanela,
   onBuscar,
   pendente,
   buscando,
@@ -862,6 +878,39 @@ function ConsultaDestaque({
         />
 
         <CampoCidade valor={cidade} onEscolher={onCidade} />
+
+        <span
+          aria-hidden="true"
+          style={{
+            flex: '0 0 1px',
+            alignSelf: 'stretch',
+            background: 'rgba(255,255,255,0.08)',
+          }}
+        />
+
+        <select
+          value={janela}
+          onChange={(e) => onJanela(e.target.value)}
+          aria-label="Data de publicação"
+          title="Só entram vagas publicadas dentro desta janela"
+          style={{
+            flex: '0 0 auto',
+            padding: '7px 10px',
+            borderRadius: 8,
+            border: '1px solid rgba(255,255,255,0.08)',
+            background: '#0B1220',
+            color: '#C8D1E0',
+            fontSize: 12.5,
+            cursor: 'pointer',
+            outline: 'none',
+          }}
+        >
+          {JANELAS.map((j) => (
+            <option key={j.valor} value={j.valor}>
+              {j.rotulo}
+            </option>
+          ))}
+        </select>
 
         <button
           onClick={onBuscar}
@@ -1443,10 +1492,16 @@ function Card({ vaga, onAbrir }) {
 
 /**
  * Com o banco vazio, este é o estado normal da tela — não uma exceção. O texto
- * precisa dizer *por que* está vazio, senão parece defeito: hoje é porque não
- * há fonte de vagas ligada, e não porque a consulta não achou nada.
+ * precisa dizer *por que* está vazio, senão parece defeito.
+ *
+ * São dois vazios diferentes e o texto tem que separá-los: a API não devolveu
+ * nada, ou devolveu e a janela de publicação escondeu tudo. Sem essa
+ * distinção o segundo caso mente — diria "a API não devolveu resultados"
+ * depois de uma requisição que devolveu dez vagas, e o aluno mexeria no cargo
+ * e na cidade quando o que estava apertado era a data.
  */
-function SemResultados({ cidade }) {
+function SemResultados({ cidade, ocultadas = 0, rotuloJanela = null }) {
+  const foiAJanela = ocultadas > 0
   return (
     <div
       style={{
@@ -1482,7 +1537,11 @@ function SemResultados({ cidade }) {
         </svg>
       </div>
       <div style={{ fontSize: 15, fontWeight: 600 }}>
-        {cidade ? `Nenhuma vaga em ${cidade}` : 'Nenhuma vaga encontrada'}
+        {foiAJanela
+          ? 'Nenhuma vaga dentro desta janela'
+          : cidade
+            ? `Nenhuma vaga em ${cidade}`
+            : 'Nenhuma vaga encontrada'}
       </div>
       <div
         style={{
@@ -1493,9 +1552,26 @@ function SemResultados({ cidade }) {
           lineHeight: 1.6,
         }}
       >
-        A API não devolveu resultados para esta consulta. Tente outro cargo ou
-        outra cidade — e lembre que cada nova consulta consome uma das 200
-        requisições do mês, enquanto repetir uma já feita sai do cache.
+        {foiAJanela ? (
+          <>
+            A busca devolveu{' '}
+            <strong style={{ color: '#C8D1E0', fontWeight: 600 }}>
+              {ocultadas}
+            </strong>{' '}
+            {ocultadas === 1 ? 'vaga' : 'vagas'}, mas{' '}
+            {ocultadas === 1 ? 'ela é mais antiga' : 'todas são mais antigas'}{' '}
+            que “{rotuloJanela}” — ou {ocultadas === 1 ? 'veio' : 'vieram'} sem
+            data de publicação, que costuma ser o caso dos anúncios já
+            encerrados. Escolha uma janela mais larga acima: o recorte é feito
+            aqui, sem gastar requisição.
+          </>
+        ) : (
+          <>
+            A API não devolveu resultados para esta consulta. Tente outro cargo
+            ou outra cidade — e lembre que cada nova consulta consome uma das
+            200 requisições do mês, enquanto repetir uma já feita sai do cache.
+          </>
+        )}
       </div>
     </div>
   )
@@ -2492,6 +2568,20 @@ export default function App() {
   const [cidadeRascunho, setCidadeRascunho] = useState('')
   const [cargo, setCargo] = useState('')
   const [cidade, setCidade] = useState('')
+  // A janela de publicação segue o mesmo par rascunho/efetivo de cargo e
+  // cidade. O padrão é 'month' e não 'all': medido contra a API real, era o
+  // `all` — que é o que ela assume quando ninguém manda `date_posted` — que
+  // trazia metade do resultado sem data de publicação, e era essa metade que
+  // vinha com anúncio já encerrado.
+  const [janelaRascunho, setJanelaRascunho] = useState(JANELA_PADRAO)
+  const [janela, setJanela] = useState(JANELA_PADRAO)
+  // Duas janelas, e a distinção é o que economiza cota: `janela` é o recorte
+  // que a tela mostra, `janelaBaixada` é o que a API foi perguntada. Apertar
+  // de "Último mês" para "Última semana" mexe só na primeira — o resultado da
+  // semana já está dentro do que o mês baixou. É também a janela que o
+  // "Carregar mais" precisa repetir: o cursor pertence à busca que o gerou, e
+  // pedir a próxima página com outro `date_posted` misturaria dois recortes.
+  const [janelaBaixada, setJanelaBaixada] = useState(JANELA_PADRAO)
   const [consultaFeita, setConsultaFeita] = useState(false)
   const [buscando, setBuscando] = useState(false)
   const [erroBusca, setErroBusca] = useState(null)
@@ -2635,13 +2725,26 @@ export default function App() {
     window.history.back()
   }
 
-  // Sem recorte local: o `banco` já é o retorno da consulta, e quem filtrou
-  // por localização foi a API. Comparar a cidade de novo aqui derrubaria vagas
-  // legítimas — a JSearch escreve "Caxias Do Sul" ou devolve municípios
-  // vizinhos, e nada disso bate com o rótulo exato do IBGE.
+  // Sem recorte local *por localização*: quem filtrou cidade foi a API, e
+  // comparar de novo aqui derrubaria vagas legítimas — a JSearch escreve
+  // "Caxias Do Sul" ou devolve municípios vizinhos, e nada disso bate com o
+  // rótulo exato do IBGE.
+  //
+  // Por data há recorte, e só na aba Vagas. Dois motivos: a API aceita o
+  // `date_posted` e nem sempre o cumpre (`week` voltou vaga de 26 dias no
+  // teste real), e o Banco de Dados é acervo — recortar o histórico por
+  // "última semana" esconderia o que ele existe para guardar.
+  const { visiveis: dentroDaJanela, ocultadas: ocultadasPelaJanela } = useMemo(
+    () =>
+      aba === 'vagas'
+        ? filtrarPorJanela(banco, janela)
+        : { visiveis: banco, ocultadas: 0 },
+    [banco, janela, aba],
+  )
+
   const filtradas = useMemo(
-    () => ordenar(banco, ordem, direcao),
-    [banco, ordem, direcao],
+    () => ordenar(dentroDaJanela, ordem, direcao),
+    [dentroDaJanela, ordem, direcao],
   )
 
   const total = filtradas.length
@@ -2664,6 +2767,17 @@ export default function App() {
   // busca olha as duas listas — banco e Vaga Inteligente — e a ordem entre
   // elas está explicada em `detalhe.js`.
   const detalhe = acharVaga(vagaAberta, banco, vagasIa)
+
+  // A Vaga Inteligente não tem dropdown — o cargo dela sai do currículo, não
+  // de um formulário — mas sofre do mesmo defeito e recebe o mesmo remédio na
+  // janela padrão. Sem isto, o painel poderia destacar como "a melhor vaga"
+  // um anúncio sem data de publicação, que é justamente o perfil dos que já
+  // saíram do ar. `detalhe` acima olha `vagasIa` inteiro de propósito: uma
+  // vaga aberta antes do filtro não pode virar página em branco.
+  const vagasIaVisiveis = useMemo(
+    () => filtrarPorJanela(vagasIa, JANELA_PADRAO).visiveis,
+    [vagasIa],
+  )
 
   // Na aba Vagas nada aparece até se buscar. A aba Banco de Dados mostra o
   // acervo sempre.
@@ -2697,13 +2811,38 @@ export default function App() {
 
     const termo = cargoRascunho.trim()
     const cidadeAlvo = cidadeRascunho.trim()
+    const janelaAlvo = janelaRascunho
     if (!termo && !cidadeAlvo) {
       setErroBusca('Informe ao menos o cargo ou a cidade para buscar.')
       return
     }
 
+    // Mesma consulta, e a janela pedida cabe no que já foi baixado: o
+    // recorte é local, sem rede e sem ranking novo — as notas já estão nas
+    // vagas que estão na tela. É o que permite apertar o dropdown de "Último
+    // mês" para "Última semana" sem gastar uma das 200 requisições do mês.
+    if (
+      consultaFeita &&
+      banco.length > 0 &&
+      termo === cargo.trim() &&
+      cidadeAlvo === cidade.trim() &&
+      cabeNoQueJaTemos(janelaAlvo, janelaBaixada)
+    ) {
+      setCargo(cargoRascunho)
+      setCidade(cidadeRascunho)
+      setJanela(janelaAlvo)
+      setPagina(1)
+      setErroBusca(null)
+      setErroRanking(null)
+      setCota(
+        registrarUso(termo, cidadeAlvo, 'cache', { janela: janelaBaixada }),
+      )
+      return
+    }
+
     setCargo(cargoRascunho)
     setCidade(cidadeRascunho)
+    setJanela(janelaAlvo)
     setErroBusca(null)
     setErroRanking(null)
     setPagina(1)
@@ -2711,13 +2850,14 @@ export default function App() {
     // dentro de outra busca e pediria a página seguinte da lista errada.
     setCursor(null)
 
-    const guardado = consultarCache(termo, cidadeAlvo)
+    const guardado = consultarCache(termo, cidadeAlvo, janelaAlvo)
     if (guardado) {
+      setJanelaBaixada(janelaAlvo)
       setBanco(guardado.vagas)
       // Sem restaurar o cursor, repetir a busca traria as vagas de volta e o
       // botão de carregar mais sumiria — como se a consulta tivesse acabado.
       setCursor(guardado.cursor ?? null)
-      setCota(registrarUso(termo, cidadeAlvo, 'cache'))
+      setCota(registrarUso(termo, cidadeAlvo, 'cache', { janela: janelaAlvo }))
       setConsultaFeita(true)
       await ranquearBanco(guardado.vagas)
       return
@@ -2726,12 +2866,23 @@ export default function App() {
     setBuscando(true)
     let vagasEncontradas = null
     try {
-      const resposta = await buscarVagas(montarConsulta(termo, cidadeAlvo))
+      const resposta = await buscarVagas(
+        montarConsulta(termo, cidadeAlvo),
+        null,
+        janelaAlvo,
+      )
       const vagas = mapearVagas(vagasDaResposta(resposta))
       const proximo = cursorDaResposta(resposta)
+      setJanelaBaixada(janelaAlvo)
       setBanco(vagas)
       setCursor(proximo)
-      setCota(registrarUso(termo, cidadeAlvo, 'rede', { vagas, cursor: proximo }))
+      setCota(
+        registrarUso(termo, cidadeAlvo, 'rede', {
+          vagas,
+          cursor: proximo,
+          janela: janelaAlvo,
+        }),
+      )
       setConsultaFeita(true)
       vagasEncontradas = vagas
     } catch (err) {
@@ -2744,7 +2895,7 @@ export default function App() {
       setConsultaFeita(true)
       // Um erro que chegou à API consumiu uma das 200 mesmo sem devolver vaga.
       if (erro.tocouApi) {
-        setCota(registrarUso(termo, cidadeAlvo, 'rede'))
+        setCota(registrarUso(termo, cidadeAlvo, 'rede', { janela: janelaAlvo }))
       }
     } finally {
       setBuscando(false)
@@ -2785,9 +2936,14 @@ export default function App() {
 
     let listaCompleta = null
     try {
+      // `janelaBaixada`, não `janela`: o cursor pertence à busca que o
+      // gerou. Se a tela apertou para "Última semana" depois de baixar o
+      // mês, a próxima página ainda é a página seguinte *do mês* — e o corte
+      // para semana acontece na tela, como no resto da lista.
       const resposta = await buscarVagas(
         montarConsulta(termo, cidadeAlvo),
         cursor,
+        janelaBaixada,
       )
       const novas = mapearVagas(vagasDaResposta(resposta))
       const proximo = cursorDaResposta(resposta)
@@ -2803,6 +2959,7 @@ export default function App() {
         registrarUso(termo, cidadeAlvo, 'rede', {
           vagas: listaCompleta,
           cursor: proximo,
+          janela: janelaBaixada,
         }),
       )
     } catch (err) {
@@ -2814,7 +2971,9 @@ export default function App() {
       // A lista que já estava na tela fica: ela custou requisições anteriores,
       // e o erro é da página nova, não dela.
       if (erro.tocouApi) {
-        setCota(registrarUso(termo, cidadeAlvo, 'rede'))
+        setCota(
+          registrarUso(termo, cidadeAlvo, 'rede', { janela: janelaBaixada }),
+        )
       }
     } finally {
       setCarregandoMais(false)
@@ -2900,7 +3059,9 @@ export default function App() {
   }
 
   const consultaPendente =
-    cargoRascunho !== cargo || cidadeRascunho !== cidade
+    cargoRascunho !== cargo ||
+    cidadeRascunho !== cidade ||
+    janelaRascunho !== janela
 
   /**
    * Busca inteligente de verdade: o cargo não é digitado, sai do perfil que
@@ -2943,10 +3104,12 @@ export default function App() {
     setErroIa(null)
     setBuscaIaFeita(false)
 
-    const guardado = consultarCache(termo, cidadeAlvo)
+    const guardado = consultarCache(termo, cidadeAlvo, JANELA_PADRAO)
     if (guardado) {
       setVagasIa(guardado.vagas)
-      setCota(registrarUso(termo, cidadeAlvo, 'cache'))
+      setCota(
+        registrarUso(termo, cidadeAlvo, 'cache', { janela: JANELA_PADRAO }),
+      )
       setBuscaIaFeita(true)
       await ranquearIa(guardado.vagas)
       return
@@ -2955,16 +3118,22 @@ export default function App() {
     setBuscandoIa(true)
     let vagasEncontradas = null
     try {
-      const resposta = await buscarVagas(montarConsulta(termo, cidadeAlvo))
+      const resposta = await buscarVagas(
+        montarConsulta(termo, cidadeAlvo),
+        null,
+        JANELA_PADRAO,
+      )
       const vagas = mapearVagas(vagasDaResposta(resposta))
       setVagasIa(vagas)
-      // Grava o cursor mesmo sem paginar aqui: as duas abas dividem a mesma
-      // chave de cache (termo|cidade), e uma entrada gravada sem ele faria o
-      // "Carregar mais" da aba Vagas sumir depois de uma busca inteligente.
+      // Grava o cursor mesmo sem paginar aqui: as duas abas dividem a chave
+      // de cache quando a aba Vagas está na janela padrão, e uma entrada
+      // gravada sem ele faria o "Carregar mais" de lá sumir depois de uma
+      // busca inteligente.
       setCota(
         registrarUso(termo, cidadeAlvo, 'rede', {
           vagas,
           cursor: cursorDaResposta(resposta),
+          janela: JANELA_PADRAO,
         }),
       )
       setBuscaIaFeita(true)
@@ -2980,7 +3149,9 @@ export default function App() {
       // Mesmo raciocínio de `buscar()`: um erro que chegou à API consumiu
       // uma das 200 mesmo sem devolver vaga.
       if (erro.tocouApi) {
-        setCota(registrarUso(termo, cidadeAlvo, 'rede'))
+        setCota(
+          registrarUso(termo, cidadeAlvo, 'rede', { janela: JANELA_PADRAO }),
+        )
       }
     } finally {
       setBuscandoIa(false)
@@ -3120,10 +3291,12 @@ export default function App() {
               <ConsultaDestaque
                 cargo={cargoRascunho}
                 cidade={cidadeRascunho}
+                janela={janelaRascunho}
                 onCargo={(e) => setCargoRascunho(e.target.value)}
                 // O combobox entrega o rótulo já escolhido da lista, não um
                 // evento: não há texto digitado virando valor.
                 onCidade={setCidadeRascunho}
+                onJanela={setJanelaRascunho}
                 onBuscar={buscar}
                 pendente={consultaPendente}
                 buscando={buscando}
@@ -3164,6 +3337,17 @@ export default function App() {
                     {cargo || cidade
                       ? ` para “${[cargo, cidade].filter(Boolean).join(' em ')}”`
                       : null}
+                    {/* A conta tem que fechar: sem isto, uma busca que trouxe
+                        dez vagas e mostrou três pareceria a API devolvendo
+                        menos do que devolveu. */}
+                    {ocultadasPelaJanela > 0 && (
+                      <>
+                        {' · '}
+                        {ocultadasPelaJanela}{' '}
+                        {ocultadasPelaJanela === 1 ? 'oculta' : 'ocultas'} fora
+                        de “{janelaDe(janela)?.rotulo}”
+                      </>
+                    )}
                   </div>
                 )}
 
@@ -3228,7 +3412,13 @@ export default function App() {
                   )}
   
                   {total === 0 && (
-                    <SemResultados cidade={cidade} />
+                    <SemResultados
+                      cidade={cidade}
+                      // Só na aba Vagas: o Banco de Dados não é recortado por
+                      // data, e um "ocultadas" ali seria sempre zero.
+                      ocultadas={aba === 'vagas' ? ocultadasPelaJanela : 0}
+                      rotuloJanela={janelaDe(janela)?.rotulo}
+                    />
                   )}
   
                   <Paginacao
@@ -3343,7 +3533,7 @@ export default function App() {
             buscando={buscandoIa}
             ranqueando={ranqueandoIa}
             buscaFeita={buscaIaFeita}
-            vagas={vagasIa}
+            vagas={vagasIaVisiveis}
             erro={erroIa}
             onBuscar={buscarInteligente}
             onAbrirVaga={abrirVaga}
