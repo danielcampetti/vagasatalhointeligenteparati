@@ -8,7 +8,12 @@ vi.mock('./claude', async (importOriginal) => {
   const real = await importOriginal()
   return { ...real, chamarEstruturado: vi.fn() }
 })
-import { MAX_TOKENS, chamarEstruturado, TIPOS } from './claude'
+import {
+  EFFORT_RANKING,
+  MAX_TOKENS,
+  chamarEstruturado,
+  TIPOS,
+} from './claude'
 import {
   NotasSchema,
   TAMANHO_LOTE,
@@ -213,6 +218,29 @@ function loteDe(params) {
   )
 }
 
+/**
+ * O `effort` não estava sendo enviado, e o padrão do `claude-sonnet-5` é
+ * `high`. Medido contra a API real, mesmo lote de 10 vagas, três execuções:
+ *
+ *   high    23,6s · 26,8s · 28,4s   saída 2.000–2.700 tokens
+ *   medium  15,1s · 16,4s · 19,2s   saída   430–1.412 tokens
+ *   low      5,2s ·  5,4s ·  6,3s   saída       ~440 tokens
+ *
+ * A resposta útil são ~250 tokens em todos os casos: o resto é pensamento —
+ * a própria API confirma em `usage.output_tokens_details.thinking_tokens`.
+ *
+ * `medium` e não `low` porque a diferença de nota foi medida também, com
+ * `high` rodado duas vezes para estabelecer o piso de ruído: duas chamadas
+ * idênticas já divergem 6,8 pontos em média. `low` diverge 15,5 — o dobro do
+ * ruído — e perdeu as três primeiras posições. `medium` fica no meio, e corta
+ * quase metade do tempo e do custo de saída.
+ */
+describe('effort do ranking', () => {
+  test('a janela de pensamento é escolhida, não herdada do padrão da API', () => {
+    expect(EFFORT_RANKING).toBe('medium')
+  })
+})
+
 describe('ranquear', () => {
   test('caminho feliz: uma chamada, TIPOS.RANKING, max_tokens do MAX_TOKENS, output_config com schema, e volta com nota em cada vaga', async () => {
     chamarEstruturado.mockClear()
@@ -233,6 +261,10 @@ describe('ranquear', () => {
     expect(tipo).toBe(TIPOS.RANKING)
     expect(params.max_tokens).toBe(MAX_TOKENS)
     expect(params.output_config.format).toBeTruthy()
+    // Sem `effort` explícito o padrão do claude-sonnet-5 é `high`, e foi
+    // medido o que isso custa: 2.453 tokens de saída para 250 de resposta —
+    // ~90% pensamento, 27s de espera na tela. Ver o teste abaixo.
+    expect(params.output_config.effort).toBe(EFFORT_RANKING)
     // O perfil e as vagas resumidas viajam no conteúdo — sem isso a Claude
     // não teria com o que pontuar.
     const conteudo = params.messages[0].content

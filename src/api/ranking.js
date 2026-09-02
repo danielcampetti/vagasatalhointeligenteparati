@@ -30,7 +30,12 @@
  */
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod'
 import { z } from 'zod'
-import { MAX_TOKENS, TIPOS, chamarEstruturado } from './claude'
+import {
+  EFFORT_RANKING,
+  MAX_TOKENS,
+  TIPOS,
+  chamarEstruturado,
+} from './claude'
 
 /**
  * Por que 30 e não 12: com a paginação ("Carregar mais"), a lista passa a
@@ -160,7 +165,13 @@ async function pontuarLote(perfil, instrucao, vagas) {
   const resposta = await chamarEstruturado(TIPOS.RANKING, {
     max_tokens: MAX_TOKENS,
     system: `${instrucao}\n\nCampos com null significam que o currículo não informa aquilo. Nesse caso ignore a cláusula correspondente em vez de supor um valor — uma pretensão salarial ausente não é uma pretensão baixa.\n\nDevolva uma nota para CADA vaga recebida, usando o ref exatamente como veio. O motivo tem no máximo 10 palavras.`,
-    output_config: { format: zodOutputFormat(NotasSchema) },
+    // `effort` explícito: sem ele o padrão da API é `high`, que gastava
+    // ~2.400 tokens de saída (90% pensamento) para uma resposta de 250 e
+    // deixava a tela em 27s de espera. Ver `EFFORT_RANKING` em claude.js.
+    output_config: {
+      format: zodOutputFormat(NotasSchema),
+      effort: EFFORT_RANKING,
+    },
     messages: [
       {
         role: 'user',

@@ -48,6 +48,43 @@ export const MODELO = 'claude-sonnet-5'
 export const MAX_TOKENS = 16000
 
 /**
+ * Quanto o modelo pensa antes de responder o ranking.
+ *
+ * Este valor não existia, e a ausência dele não era neutra: sem `effort`
+ * explícito o `claude-sonnet-5` roda no padrão da API, que é **`high`**. O
+ * comentário do `MAX_TOKENS` acima já apontava para cá ("se um dia o custo do
+ * pensamento incomodar, o controle é `output_config.effort`") — o gancho
+ * estava documentado e nunca foi ligado.
+ *
+ * Medido contra a API real, mesmo lote de 10 vagas, três execuções cada:
+ *
+ *   high     23,6s · 26,8s · 28,4s    saída 2.000–2.700 tokens
+ *   medium   15,1s · 16,4s · 19,2s    saída   430–1.412 tokens
+ *   low       5,2s ·  5,4s ·  6,3s    saída       ~440 tokens
+ *
+ * A resposta útil são ~250 tokens em qualquer um deles — dez objetos
+ * `{ref, nota, motivo}`. Todo o resto é pensamento, e a API confirma o número
+ * em `usage.output_tokens_details.thinking_tokens` (966 de 1.412 no `medium`).
+ * Como token de saída é gerado em série, ele **é** o relógio da tela.
+ *
+ * Por que `medium` e não `low`, que seria 5× mais rápido: a nota muda. Isso
+ * foi medido rodando `high` **duas vezes**, para separar degradação de ruído —
+ * sem essa referência não dá para interpretar a diferença:
+ *
+ *   high vs high (o ruído)   6,8 pontos de diferença média, 1º lugar mantido
+ *   medium                  12,0 pontos, 1º lugar trocado
+ *   low                     15,5 pontos, nenhuma das 3 primeiras mantida
+ *
+ * `low` diverge o dobro do ruído e perde o pódio inteiro. `medium` corta
+ * quase metade do tempo e do custo de saída assumindo a metade do desvio.
+ *
+ * Vale só para o ranking. O perfil roda uma vez por currículo e a
+ * justificativa é sob demanda: nenhum dos dois é a espera que incomoda, e
+ * nenhum dos dois foi medido — mudar os três por simetria seria supor.
+ */
+export const EFFORT_RANKING = 'medium'
+
+/**
  * Os três valores de `tipo` que `contabilizar` grava — centralizados para
  * que um typo não vire, em silêncio, uma linha que nunca aparece na aba
  * Controle. Perfil (Task 6), ranking (Task 7), justificativa (Task 8).
