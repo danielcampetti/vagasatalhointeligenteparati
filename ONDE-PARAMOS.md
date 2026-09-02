@@ -3,6 +3,45 @@
 Retomada rápida do protótipo VAGAS. O **README.md** explica *como as coisas
 funcionam*; este arquivo diz *em que pé estão* e *o que fazer a seguir*.
 
+> **Como ler:** o bloco abaixo é o estado de hoje. Depois dele vem o diário do
+> dia 02/09, do mais recente para o mais antigo — é onde estão as medições e o
+> **porquê** de cada mudança. As seções estruturais ("O que funciona hoje",
+> "Decisões já tomadas", "Pendências", "Armadilhas") vêm no fim e valem para
+> qualquer retomada.
+
+---
+
+## Onde estamos agora — 02/09/2026
+
+**Seis commits hoje**, todos no `main` local, working tree limpo. Para o
+número exato à frente do remoto: `git rev-list --count origin/main..main`.
+
+    af24166  Listagem: a coluna Status virou "Ver Vaga", com link para o anúncio
+    ea64f9a  Buscar: uma página, e o botão serve as seguintes do cache
+    b433a6b  Carregar mais: manda só as vagas novas, com âncora de escala
+    4f85abc  README/ONDE-PARAMOS: a janela, o custo do pensamento e o dashboard
+    a419468  ranking: o effort nunca era enviado, e o padrão da API é "high"
+    ab00cd2  Aba Vagas: janela de publicação, contra vaga encerrada e vaga velha
+
+O dia inteiro foi **medição contra a API real**, não leitura de código. O que
+mudou, em uma linha cada:
+
+| | antes | agora |
+|---|---|---|
+| vagas sem data na busca | 5 de 10 | 0 de 10 |
+| espera do "Avaliando N vagas" | ~28s | ~7–19s |
+| custo de uma busca | $0,0486 | $0,0289 |
+| custo de "Carregar mais" | ~$0,0399 | $0,0157 |
+| "Buscar" depois de paginar | devolvia a lista acumulada | devolve uma página |
+| coluna Status | pílula "Ativa" em toda linha | link para o anúncio |
+
+Testes: **202** (`npm test`). Lint limpo fora de um aviso pré-existente em
+`perfil.test.js`. Build OK.
+
+**Continua tudo local, sem push** — decisão de 28/08, reafirmada hoje. Um push
+no `main` dispara o deploy do GitHub Pages (`on: push: branches: [main]`), e o
+site publicado tem busca e Avaliação IA mortas: não há proxy em produção.
+
 ---
 
 ## 02/09 (noite, 3) — a coluna Status virou "Ver Vaga"
@@ -308,6 +347,10 @@ porque a cadeia continua certa se a API voltar a mandar os campos.
 
 ## Estado do repositório
 
+> Escrito em 28/08 e ainda válido no essencial — a decisão de não publicar, o
+> `.env` com duas chaves, o histórico da `avaliacao-ia`. O que mudou desde
+> então está em "Onde estamos agora", no topo.
+
 Tudo commitado, `git status` limpo. **A `avaliacao-ia` foi integrada ao
 `main` em 28/08**, por fast-forward — ela não era um desvio lateral, era a
 linha principal do trabalho, e o histórico já estava commit a commit. As duas
@@ -437,12 +480,25 @@ chamada. Uma tela em branco sem essas linhas significa que nem saiu.
 
 - **Busca real na JSearch** (OpenWeb Ninja), só em `npm run dev`. A chave vive
   no `.env` e apenas o proxy do Vite a enxerga.
+- **Janela de publicação** (02/09): dropdown ao lado da cidade — Hoje, 3 dias,
+  Semana, Mês, Qualquer data —, padrão **Último mês**. Corta duas vezes:
+  `date_posted` na requisição e de novo na tela, porque a API aceita `week` e
+  não o cumpre. Vaga sem data de publicação é descartada fora de "Qualquer
+  data" — é o proxy mais próximo de "encerrada" que a resposta oferece, já que
+  a API **não tem campo de expiração**. Estreitar a janela não gasta cota.
+- **"Ver Vaga" na listagem** (02/09): a coluna Status deu lugar a um link
+  direto para o anúncio, na tabela e no cartão estreito. Dois caminhos para a
+  mesma vaga — a linha abre o detalhe interno, o ícone abre o site do
+  anunciante. A URL é saneada na origem (`linkDeCandidatura`).
 - **"Carregar mais vagas" na aba Vagas**, que traz a próxima página da JSearch
-  e a acrescenta à lista. A paginação local que já existia no rodapé passa a
-  ter o que paginar. O botão só aparece enquanto houver próxima página, e
-  escreve o próprio custo: 1 das 200 requisições + ~US$ 0,03 de reavaliação.
-- **Cache que economiza cota de verdade**: repetir uma consulta serve do
-  `localStorage` e **não faz requisição**. Teto de 20 consultas guardadas.
+  e a acrescenta à lista. Desde 02/09 ele manda à Claude **só as vagas novas**,
+  com as já pontuadas viajando como âncora de escala (`{cargo, nota}`, sem
+  descrição). O botão escreve o próprio custo, e o texto muda conforme a
+  próxima página venha do cache (de graça) ou da rede.
+- **Cache paginado** (02/09): repetir uma consulta serve do `localStorage` e
+  **não faz requisição**. A entrada registra as fronteiras das páginas, então
+  "Buscar" devolve **uma** página e o botão serve as seguintes do cache antes
+  de gastar cota. Teto de 20 consultas guardadas.
 - **Página de detalhe da vaga**, com a descrição completa e o link externo.
   Voltar funciona pelo botão e pelo navegador. Abre das **duas** listas, e nas
   duas o alvo é a **linha/card inteiro**: a tabela da aba Vagas (linha toda,
@@ -463,8 +519,12 @@ chamada. Uma tela em branco sem essas linhas significa que nem saiu.
     perfil estruturado numa chamada só à Claude. A dedução do cargo sai da
     mesma chamada, sem custo extra.
   - A busca — aba Vagas e aba Vaga Inteligente — ranqueia as vagas contra
-    esse perfil: um lote de até 12 vagas por chamada, nota relativa ao
-    conjunto daquele lote.
+    esse perfil: um lote de até **30** vagas por chamada (`TAMANHO_LOTE`), nota
+    relativa ao conjunto daquele lote. Desde 02/09 a chamada roda em
+    `effort: 'medium'` (`EFFORT_RANKING`); antes ia no padrão `high` da API, e
+    ~90% do que era gerado era pensamento.
+  - Vaga que já tem nota não é reavaliada: `ranquearPendentes` manda só as sem
+    nota, ancoradas nas que têm.
   - A página de detalhe da vaga **justifica a nota sob demanda**: botão "Por
     que esta nota?", só chama a Claude quando clicado.
   - A aba **Vaga Inteligente busca de verdade** agora: deduz o cargo do
@@ -516,19 +576,27 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 
 ## Decisões já tomadas (não relitigar)
 
+> **Duas linhas desta tabela foram relitigadas em 02/09 — com razão, e com
+> medição.** Ficam abaixo marcadas como revistas, não apagadas: saber que uma
+> decisão mudou, e por quê, vale mais que a decisão nova sozinha. Se for
+> revisitar outra daqui, o padrão é este — meça antes.
+
 | Decisão | Por quê |
 |---|---|
 | Cargo é texto livre; cidade é lista fechada | Cargo errado devolve resultado ruim; cidade errada não devolve nada |
-| **Nenhum recorte local: nem cargo, nem cidade** | Quem filtra é a API. O recorte por cidade saiu junto com o mock: a JSearch escreve "Caxias Do Sul" ou devolve municípios vizinhos, e nada disso bate com o rótulo exato do IBGE — comparar de novo derrubava vaga legítima. Sobrou ordenação e paginação |
-| Sem filtros sobre o resultado (tecnologia, empresa, modalidade, status) | Removidos de propósito |
-| Status entra como "Ativa" | Veio de uma busca agora. "Em análise"/"Encerrada" são estados do processo seletivo, sem fonte na API |
+| **Nenhum recorte local de cargo ou cidade** (data é exceção, ver acima) | Quem filtra é a API. O recorte por cidade saiu junto com o mock: a JSearch escreve "Caxias Do Sul" ou devolve municípios vizinhos, e nada disso bate com o rótulo exato do IBGE — comparar de novo derrubava vaga legítima. Sobrou ordenação e paginação |
+| Sem filtros sobre o resultado — **exceto data** | Tecnologia, empresa, modalidade e status foram removidos de propósito. A **janela de publicação** entrou em 02/09 e é a única exceção: ela não é conveniência de tela, é o remédio para as duas queixas de vaga encerrada e vaga velha, e o corte precisa acontecer também no cliente porque a API não honra `week` |
+| Status entra como "Ativa" — **mas saiu da listagem em 02/09** | O valor continua no dado e na página de detalhe, pelo motivo de sempre: veio de uma busca agora, e "Em análise"/"Encerrada" são estados do processo seletivo, sem fonte na API. O que mudou é o lugar dele na tabela: como a API não tem campo de expiração, *toda* linha mostrava a mesma pílula verde — uma coluna constante. O espaço virou o "Ver Vaga" |
 | Sem router | Abas são estado local. A página de detalhe usa `pushState` sem trocar a URL — recarregar em `/vaga/123` daria 404 no Pages |
 | Cota no `localStorage` | Uma cota mensal que zera no F5 não controla nada |
 | As 58 vagas de mock foram apagadas | Com mock dentro não dá para saber se a API está funcionando |
-| Modelo é `claude-sonnet-5`, não `claude-opus-5` | Custo questionado depois de decidido: US$ 2/US$ 10 por 1M de tokens contra US$ 5/US$ 25 do Opus. `src/custo.js` guarda os dois preços — o do Opus fica de referência histórica, não é mais usado |
+| Modelo é `claude-sonnet-5`, não `claude-opus-5` | Custo questionado depois de decidido: US$ 2/US$ 10 por 1M de tokens contra US$ 5/US$ 25 do Opus. `src/custo.js` guarda os dois preços — o do Opus fica de referência histórica, não é mais usado. **Preço reconferido na fonte oficial em 02/09**: o aumento para US$ 3/US$ 15 que estava marcado para 01/09/2026 não aconteceu |
+| O ranking roda em `effort: 'medium'` | Decidido em 02/09 depois de medir. Sem `effort` explícito o padrão da API é `high`, e ~90% do que era gerado era pensamento — 27s de espera para uma resposta de 250 tokens. `low` seria 5× mais rápido mas diverge o dobro do ruído e perde o pódio inteiro; `medium` corta quase metade do tempo e do custo assumindo metade do desvio. Vale só para o ranking: perfil e justificativa não foram medidos |
+| "Buscar" devolve uma página; o botão devolve as seguintes | Decidido em 02/09, depois de "Buscar" trazer 27 vagas. O cache guarda a lista acumulada — necessário, senão a repetição perderia páginas já pagas —, e antes ela voltava inteira. Agora a entrada registra as fronteiras das páginas |
 | Ranking em lote (perfil + N vagas, uma chamada) | Decisão antiga (era a pendência 3), agora implementada em `ranking.js`: currículo viaja uma vez, a saída cara encolhe para `{id, nota, motivo}`. Lote de 12 (`TAMANHO_LOTE`); nota **relativa ao conjunto** do lote, não porcentagem absoluta |
 | `.doc` não é mais aceito no upload | Sem servidor não há como abrir Word binário (formato OLE) no navegador. Uma textarea de colar texto cobre `.doc`, `.odt`, exportação do LinkedIn e qualquer outro formato — `.pdf` e `.docx` continuam indo por upload de arquivo |
-| `TAMANHO_LOTE` é 30, e "Carregar mais" reranqueia tudo | Lote menor que a lista a partiria em escalas independentes — medido: 9,1 pontos de diferença média e troca de primeiro lugar. Reranquear junto custa quase o mesmo (continua uma chamada) e devolve uma coluna Rank IA que de fato ordena |
+| ~~"Carregar mais" reranqueia tudo~~ — **revisto em 02/09** | Era: lote menor que a lista a partiria em escalas independentes (medido: 9,1 pontos de diferença média), e "reranquear junto custa quase o mesmo, continua uma chamada". **As duas metades caíram.** O custo: a segunda chamada custou 41% mais que a primeira (10.086 → 17.668 tokens), e numa sessão de três cliques o sobrecusto era de 102%. A premissa: os 9,1 pontos foram medidos sem piso de ruído — duas chamadas *idênticas* divergem 6,8, então o dano do fatiamento era ~2,3, não 9,1. E a condição "enquanto couber em `TAMANHO_LOTE`" se quebrava no 3º clique, quando 40 vagas viram dois lotes e as escalas se misturavam de qualquer jeito. Hoje só as vagas novas viajam, com âncora de escala |
+| `TAMANHO_LOTE` continua 30 | O teto por chamada segue valendo; o que mudou é que a lista raramente chega perto dele, porque cada "Carregar mais" só manda a página nova |
 | O trabalho fica só na máquina local, sem push | Decidido em 28/08. O `origin/main` segue anterior à busca real da JSearch, e publicar é escolha do dono do repositório — não faça por iniciativa própria ao ler o aviso de risco acima |
 | A tela acumula resultados em vez de paginar contra a API | O cursor do `search-v2` só anda para frente: não existe "cursor anterior" para pedir. Uma paginação real exigiria guardar cada página para poder voltar; acumular resolve o mesmo problema sem esse estado |
 | A faixa da nota (`min`/`max`) saiu do schema Zod e foi para `validarNotas` | A saída estruturada da Claude não suporta essas restrições — ver "Armadilhas conhecidas" |
@@ -590,6 +658,35 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
     A saída provável é a justificativa receber a nota já dada e ter de
     explicá-la, em vez de produzir outra.
 
+**Mapeadas em 02/09, medidas, e deliberadamente não feitas:**
+
+- **12. Mostrar a lista antes do ranking terminar.** É a de maior retorno que
+  sobrou, e **não custa qualidade nenhuma**: a JSearch responde em ~2s, o
+  ranking leva mais 7 a 19. Hoje a tabela espera as duas etapas de propósito
+  (ver a decisão "a lista espera o ranking", e o `fase.js:10`, que já registra
+  o preço). A saída é a coluna Rank IA carregando **por linha**, em vez de
+  bloquear a tela toda — resolve o problema original (a coluna ficava em "—"
+  sem avisar que ainda vinha coisa) sem o preço. **Reverte uma decisão
+  registrada, então é escolha do dono.**
+- **13. Cortar a descrição da vaga antes de mandar à Claude.** 77% da entrada
+  do ranking são descrições, e boa parte é texto que a própria
+  `INSTRUCAO_PADRAO` manda ignorar — uma descrição medida tinha 6.561
+  caracteres terminando em política de uniforme e escala de turno. Cortar em
+  1.500 tira **40% da entrada**. Não feito porque **só medi tokens, não
+  qualidade**: falta rodar a mesma comparação de notas que o `effort` teve,
+  com `high` duas vezes para estabelecer o piso de ruído.
+- **14. `JSON.stringify(x, null, 2)` no `pontuarLote`** gasta **356 tokens só
+  em indentação**. Tirar o `null, 2` é risco zero.
+- **15. Dois lotes em paralelo cortariam o tempo pela metade.** A nota do
+  `ranking.js` rejeitou o fatiamento citando 9,1 pontos de divergência, mas o
+  ruído entre duas chamadas iguais é 6,8 — o dano real é ~2,3. A advertência é
+  bem mais fraca do que o comentário faz parecer, e vale reler antes de
+  descartar a ideia.
+- **16. Avisar na tela quando a lista passa do `TAMANHO_LOTE`.** Acima de 30
+  vagas o `emLotes` parte em lotes de escalas independentes, e a coluna Rank IA
+  passa a misturar réguas **em silêncio**. Hoje é raro (cada "Carregar mais" só
+  manda a página nova), mas continua possível numa busca única muito grande.
+
 **Dívidas menores:**
 
 6. **`npm run lint` não pega variável inexistente.** Segue como estava: o
@@ -604,8 +701,10 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 10. `ModalNovaVaga` existe no `App.jsx` e **nenhum botão o abre**. Confirmado
     de novo: `setModalAberto(true)` só aparece dentro de um comentário, nunca
     em código executável.
-11. **`App.jsx` encolheu, mas ficou parcial.** Eram 3.628 linhas; são
-    **3.013** agora (`wc -l src/App.jsx`, conferido). Dois painéis
+11. **`App.jsx` encolheu, e voltou a crescer.** Eram 3.628 linhas, caíram para
+    3.013 com a extração dos painéis, e o trabalho de 02/09 as levou de volta
+    a **3.708** — o número aqui já envelheceu duas vezes, então confira com
+    `wc -l src/App.jsx` em vez de acreditar nele. Dois painéis
     (`PainelIA.jsx`, `PainelVagaInteligente.jsx`), um campo de cidade
     (`CampoCidade.jsx`) e dois avisos compartilhados (`AvisoErro`,
     `Carregando`, em `comuns.jsx`) saíram para `src/paineis/`. Sobrou o
@@ -616,6 +715,26 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 
 ## Armadilhas conhecidas
 
+- **`date_posted=week` é aceito e ignorado.** A API ecoa o parâmetro em
+  `parameters` e responde 200, mas em 02/09 devolveu vaga de 26 dias e cinco
+  sem data — praticamente o mesmo conjunto do `all`. `today`, `3days` e `month`
+  filtram de verdade. **Não simplifique o `janela.js` confiando no
+  `date_posted`**: o corte local não é redundância, é o portão que funciona.
+- **A API não tem campo de expiração.** A união dos campos de uma resposta de
+  10 vagas dá 35 nomes e nenhum é de validade. Não existe como perguntar se o
+  anúncio caiu — o `status: 'Ativa'` fixo do `mapear.js` não é preguiça, é a
+  única coisa honesta disponível. O proxy que se usa é idade desconhecida.
+- **O cache guarda a lista acumulada, não a primeira página.** `carregarMais`
+  grava `[...banco, ...novas]` sob a **mesma chave** da busca — e tem que ser
+  assim, senão a próxima repetição perderia páginas já baixadas e pagas. Quem
+  mexer em `buscar()` precisa lembrar de restaurar só a primeira fatia
+  (`proximaPagina(entrada, 0)`): a versão que fazia `setBanco(guardado.vagas)`
+  devolvia 27 vagas numa busca, e mandava as 27 para a Claude.
+- **Medição feita com a chave do projeto entra na fatura, mas não no medidor.**
+  A aba Controle só conta o que o app gastou. Onze chamadas de teste por fora
+  somaram US$ 0,43 na mesma chave em 02/09 — 40% do total — e fizeram o
+  dashboard da Anthropic parecer o dobro do custo real por busca. Ao comparar
+  os dois números, filtre por requisição, não por total.
 - **A nota do ranking É relativa ao lote — medido, não suposto.** O cabeçalho
   do `ranking.js` afirmava isso desde o desenho, e havia motivo para duvidar:
   a instrução de avaliação define faixas absolutas ("Excelente, Muito bom,
