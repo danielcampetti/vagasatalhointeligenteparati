@@ -55,9 +55,10 @@ import {
   guardarVagasRemoto,
   lerAcervoRemoto,
 } from './acervoRemoto'
+import { marcasMudadas } from './vaga'
 import { FILTRO_VAZIO, filtrarAcervo, opcoesDoAcervo } from './filtroAcervo'
 import CampoCidade from './paineis/CampoCidade'
-import { AvisoErro, Carregando } from './paineis/comuns'
+import { AvisoErro, AvisoRessalva, Carregando } from './paineis/comuns'
 import PainelIA from './paineis/PainelIA'
 import PainelVagaInteligente from './paineis/PainelVagaInteligente'
 
@@ -3096,6 +3097,12 @@ export default function App() {
   /** 'carregando' | 'pronto' | 'falhou' — ver `AcervoVazio`. */
   const [acervoEstado, setAcervoEstado] = useState('carregando')
   const [acervoErro, setAcervoErro] = useState('')
+  /**
+   * A busca deu certo e o arquivamento não. São coisas diferentes, e por isso
+   * este aviso não é o `AvisoErro` vermelho: as vagas estão na tela e valem —
+   * o que não aconteceu foi elas entrarem no acervo compartilhado.
+   */
+  const [avisoArquivo, setAvisoArquivo] = useState('')
   // Muda para forçar uma nova tentativa depois de uma falha.
   const [tentativa, setTentativa] = useState(0)
 
@@ -3153,8 +3160,18 @@ export default function App() {
     if (!vagas?.length) return
     try {
       setAcervo(await guardarVagasRemoto(vagas))
+      setAvisoArquivo('')
     } catch (err) {
-      console.warn('[acervo] não consegui arquivar:', err.message)
+      console.warn('[acervo] não consegui arquivar:', err.causa || err.message)
+      /**
+       * A §7 do desenho diz que um POST que falha "vira aviso, nunca erro
+       * fatal". A metade do "nunca fatal" já estava certa — a busca sobrevive,
+       * as vagas continuam na tela, e elas já custaram cota. Faltava a metade
+       * do *aviso*: sem ela quem buscou gasta requisição e acredita que o
+       * resultado foi para o acervo, e só descobre que não foi quando a aba
+       * Banco de Dados não tem o que ele viu.
+       */
+      setAvisoArquivo(err.message)
     }
   }
 
@@ -4104,12 +4121,25 @@ export default function App() {
     const alvo = acervo.find((x) => x.id === id)
     if (!alvo) return
     const depois = fn(alvo)
+
+    /**
+     * Só o que mudou vai para o servidor.
+     *
+     * Mandar as três marcas sempre era como a nota paga de outra pessoa
+     * morria: esta aba pode ter carregado antes da Avaliação IA de alguém, e aí
+     * a cópia local tem `rank: null`. Um clique que só liga `seen` levava esse
+     * null junto e apagava, no acervo compartilhado, uma nota que custou uma
+     * chamada da Claude.
+     *
+     * O servidor também se defende disso — o `atualizar` passa pelo `mesclar`
+     * —, mas mandar o que não mudou é pedir para o outro lado adivinhar
+     * intenção. Duas travas, e esta é a que diz a verdade sobre o clique.
+     */
+    const mudou = marcasMudadas(alvo, depois)
+    if (Object.keys(mudou).length === 0) return
+
     try {
-      await atualizarVagaRemota(id, {
-        fav: depois.fav,
-        seen: depois.seen,
-        rank: depois.rank,
-      })
+      await atualizarVagaRemota(id, mudou)
     } catch (err) {
       console.warn('[acervo] não consegui gravar a marca:', err.message)
     }
@@ -4223,6 +4253,16 @@ export default function App() {
 
             {aba === 'vagas' && erroBusca && <AvisoErro texto={erroBusca} />}
             {aba === 'vagas' && erroRanking && <AvisoErro texto={erroRanking} />}
+
+            {/* Perto dos resultados, porque é sobre eles: vieram, valem, e não
+                entraram no acervo compartilhado. A busca não falhou — por isso
+                é ressalva em âmbar e não erro em vermelho. */}
+            {aba === 'vagas' && avisoArquivo && (
+              <AvisoRessalva
+                texto={`As vagas apareceram, mas não foram para o acervo compartilhado: ${avisoArquivo} Elas continuam nesta tela; quem abrir a aba Banco de Dados não vai encontrá-las.`}
+                onDispensar={() => setAvisoArquivo('')}
+              />
+            )}
 
             {faseVagas ? (
               <div

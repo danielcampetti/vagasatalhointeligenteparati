@@ -44,6 +44,73 @@ export function AvisoErro({ texto }) {
 }
 
 /**
+ * Uma ressalva sobre algo que deu certo pela metade.
+ *
+ * Não é o `AvisoErro`: em âmbar e dispensável, porque o que a pessoa pediu
+ * aconteceu — o acessório é que não. O caso que o trouxe é o arquivamento: a
+ * busca foi à API, gastou cota e as vagas estão na tela; o que falhou foi
+ * mandá-las para o acervo compartilhado. Pintar isso de vermelho diria que a
+ * busca falhou, e não falhou; não dizer nada deixaria quem buscou acreditando
+ * que o resultado foi guardado.
+ *
+ * Dispensável porque é informação, não pendência: quem leu já sabe, e a linha
+ * não pode ficar entre a pessoa e a lista que ela pediu.
+ */
+export function AvisoRessalva({ texto, onDispensar }) {
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'flex-start',
+        gap: 10,
+        marginBottom: 14,
+        padding: '11px 14px',
+        borderRadius: 10,
+        border: '1px solid rgba(251,191,36,0.28)',
+        background: 'rgba(251,191,36,0.07)',
+        fontSize: 13,
+        color: '#E3C078',
+        lineHeight: 1.6,
+        maxWidth: 860,
+      }}
+    >
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        style={{ flex: '0 0 16px', marginTop: 2 }}
+      >
+        <path d="M12 4.5 2.5 20h19L12 4.5z" />
+        <path d="M12 10v4M12 17h.01" />
+      </svg>
+      <span style={{ flex: 1 }}>{texto}</span>
+      <button
+        type="button"
+        onClick={onDispensar}
+        aria-label="Dispensar aviso"
+        title="Dispensar"
+        style={{
+          flex: '0 0 auto',
+          background: 'none',
+          border: 'none',
+          color: 'inherit',
+          cursor: 'pointer',
+          fontSize: 16,
+          lineHeight: 1,
+          padding: '0 2px',
+          opacity: 0.7,
+        }}
+      >
+        ×
+      </button>
+    </div>
+  )
+}
+
+/**
  * Espera de uma chamada de rede.
  *
  * O `detalhe` é a segunda linha, opcional. Ele existe para a espera do
