@@ -37,24 +37,13 @@
 import express from 'express'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { abrirBanco, criarAcervo } from './src/servidor/banco.js'
+import { abrirBanco, caminhoDoBanco, criarAcervo } from './src/servidor/banco.js'
+import { criarRotasAcervo } from './src/servidor/rotas.js'
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url))
 const DIST = path.join(AQUI, 'dist')
 
 const PORTA = process.env.PORT || 3000
-
-/**
- * Onde o acervo mora.
- *
- * No Railway é um volume — o disco comum de lá é efêmero, e sem volume o banco
- * morreria a cada deploy, que é exatamente o defeito que ele veio corrigir.
- *
- * Local, o padrão é um arquivo ao lado do código. O README promete que o
- * `npm run dev` e o Railway se comportam igual, e exigir volume para rodar na
- * máquina de quem desenvolve quebraria essa promessa.
- */
-const BANCO_CAMINHO = process.env.BANCO_CAMINHO ?? path.join(AQUI, 'acervo.db')
 
 /**
  * Os dois destinos, na mesma forma que o `vite.config.js` usa.
@@ -159,7 +148,7 @@ function reproxiar(destino) {
  * colateral — e uma porta ocupada derrubava a suíte por um motivo que não
  * tinha nada a ver com o que estava sendo testado.
  */
-export function criarApp({ acervo = criarAcervo(abrirBanco(BANCO_CAMINHO)) } = {}) {
+export function criarApp({ acervo = criarAcervo(abrirBanco(caminhoDoBanco())) } = {}) {
   const app = express()
 
   for (const destino of DESTINOS) {
@@ -176,34 +165,13 @@ export function criarApp({ acervo = criarAcervo(abrirBanco(BANCO_CAMINHO)) } = {
    * O acervo compartilhado.
    *
    * Vem antes do estático porque `express.static` responderia 404 a
-   * `/api/acervo` antes de qualquer rota registrada depois dele. Não há
-   * `DELETE` — decisão do dono do projeto: nada é destruído no servidor.
+   * `/api/acervo` antes de qualquer rota registrada depois dele.
+   *
+   * As rotas em si moram no `src/servidor/rotas.js`, e não aqui, porque o dev
+   * server do vite monta exatamente as mesmas — duas cópias seriam duas
+   * chances de o `npm run dev` e o Railway divergirem.
    */
-  const json = express.json({ limit: '10mb' })
-
-  app.get('/api/acervo', (_req, res) => {
-    res.json({ vagas: acervo.listar() })
-  })
-
-  app.get('/api/acervo/:id', (req, res) => {
-    const vaga = acervo.buscarPorId(req.params.id)
-    if (!vaga) return res.status(404).json({ message: 'Vaga não encontrada no acervo.' })
-    res.json(vaga)
-  })
-
-  app.post('/api/acervo', json, (req, res) => {
-    // Corpo sem `vagas` não é erro: um POST de lista vazia é o que a busca sem
-    // resultado manda, e recusá-lo com 400 viraria um aviso na tela por um
-    // não-evento.
-    const vagas = Array.isArray(req.body?.vagas) ? req.body.vagas : []
-    res.json({ vagas: acervo.guardar(vagas) })
-  })
-
-  app.patch('/api/acervo/:id', json, (req, res) => {
-    const vaga = acervo.atualizar(req.params.id, req.body ?? {})
-    if (!vaga) return res.status(404).json({ message: 'Vaga não encontrada no acervo.' })
-    res.json(vaga)
-  })
+  app.use('/api/acervo', criarRotasAcervo(acervo))
 
   app.use(express.static(DIST))
 
@@ -236,5 +204,20 @@ if (ehPontoDeEntrada) {
       const tem = Boolean(process.env[d.variavel]?.trim())
       console.log(`[${d.nome}] ${tem ? 'chave presente' : `SEM ${d.variavel}`}`)
     }
+    /**
+     * O caminho do banco vai para o log ao lado da porta e das chaves porque
+     * `BANCO_CAMINHO` ausente é a falha que não dá sintoma nenhum: o app sobe,
+     * funciona perfeitamente, e o acervo morre no deploy seguinte — que é o
+     * defeito exato que este trabalho existe para corrigir. Sem esta linha só
+     * se descobre reparando que o acervo zera de tempos em tempos.
+     */
+    const caminho = caminhoDoBanco()
+    const daVariavel = Boolean(process.env.BANCO_CAMINHO?.trim())
+    console.log(
+      `[acervo] banco em ${caminho}` +
+        (daVariavel
+          ? ''
+          : ' — SEM BANCO_CAMINHO: disco efêmero, o acervo some no próximo deploy'),
+    )
   })
 }
