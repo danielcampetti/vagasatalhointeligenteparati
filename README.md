@@ -530,6 +530,7 @@ Railway precisa de duas variáveis de ambiente:
 JSEARCH_API_KEY     a mesma do .env
 ANTHROPIC_API_KEY   a mesma do .env
 BASE_PATH=/         no build
+BANCO_CAMINHO       /dados/acervo.db — o acervo compartilhado
 ```
 
 `BASE_PATH` é o que impede a página abrir sem CSS. O padrão do `vite.config.js`
@@ -537,6 +538,30 @@ BASE_PATH=/         no build
 Railway o app tem o domínio inteiro para si e precisa de `/`. Errar isso faz o
 HTML pedir os assets no lugar errado e receber 404 — o mesmo defeito nos dois
 destinos, em direções opostas.
+
+#### O volume do acervo
+
+O acervo compartilhado é um SQLite, e ele precisa de um **volume do Railway
+montado em `/dados`**, com `BANCO_CAMINHO=/dados/acervo.db`.
+
+O volume não é opcional. Sem ele o `BANCO_CAMINHO` cai num caminho do disco
+comum do container, que é efêmero: o app sobe, funciona perfeitamente, e o
+acervo morre a cada deploy — que é exatamente o defeito que ele veio corrigir,
+e sem sintoma nenhum até alguém reparar que o acervo zera sozinho. O caminho
+resolvido aparece no log de arranque (`[acervo] banco em ...`), com aviso
+quando a variável está ausente; é a primeira coisa a conferir se as vagas
+sumirem.
+
+> **Uma réplica, e só uma.** O desenho assume um processo, uma conexão e nenhum
+> `busy_timeout`. Subir o serviço para 2 réplicas sobre o mesmo volume produz
+> `SQLITE_BUSY` nas escritas, sem nenhuma nova tentativa — e "aumentar as
+> réplicas" é o tipo de botão que parece inofensivo. Se um dia precisar
+> escalar, o acervo tem que sair do SQLite em arquivo antes.
+
+Local, sem `BANCO_CAMINHO`, o banco é um `acervo.db` ao lado do código
+(ignorado pelo git), e o `npm run dev` serve `/api/acervo` pelo próprio dev
+server do vite — as mesmas rotas do `server.js`, para dev e Railway se
+comportarem igual.
 
 Para rodar o build de produção localmente antes de publicar:
 
