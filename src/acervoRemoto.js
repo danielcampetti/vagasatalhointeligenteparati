@@ -68,6 +68,26 @@ async function ida(caminho, opcoes) {
     )
   }
 
+  /**
+   * 200 com corpo que não é JSON é falha, não acervo vazio.
+   *
+   * Sem esta linha, o `corpo` continuava `null`, ninguém lançava, e
+   * `lerAcervoRemoto` devolvia `[]` — exatamente a falha silenciosa que o
+   * docstring deste módulo diz existir para impedir, só que pela outra porta.
+   *
+   * E é alcançável sem ninguém de má fé: o catch-all do `server.js` responde
+   * **200 com o `index.html`** para qualquer caminho que não bata numa rota.
+   * Renomear `/api/acervo` numa manutenção futura transformaria o acervo
+   * inteiro em "ainda está vazio", mais o conselho de fazer uma busca que não
+   * traria nada de volta.
+   */
+  if (corpo === null) {
+    throw new ErroAcervo(
+      'O servidor respondeu algo que não é o acervo. Ele pode estar em atualização.',
+      { status: res.status },
+    )
+  }
+
   return corpo
 }
 

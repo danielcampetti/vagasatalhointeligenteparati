@@ -59,6 +59,37 @@ describe('lerAcervoRemoto', () => {
     vi.stubGlobal('fetch', responde({ message: 'banco fora do ar' }, { status: 500 }))
     await expect(lerAcervoRemoto()).rejects.toThrow(/banco fora do ar/)
   })
+
+  /**
+   * 200 com corpo que não é JSON é a mesma falha silenciosa, por outra porta —
+   * e ela é alcançável sem ninguém de má fé: o catch-all do `server.js`
+   * responde **200 com o `index.html`** para qualquer caminho que não bata numa
+   * rota. Renomear `/api/acervo` numa manutenção futura transformaria o acervo
+   * inteiro em "ainda está vazio" mais o conselho de buscar, que não ajuda.
+   */
+  test('200 com corpo que não é JSON é falha, não acervo vazio', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError('Unexpected token <')
+        },
+      }),
+    )
+    await expect(lerAcervoRemoto()).rejects.toBeInstanceOf(ErroAcervo)
+  })
+
+  // A rota é contrato: sem ninguém olhar a URL, trocá-la por engano passa na
+  // suíte inteira e só aparece publicado.
+  test('a URL pedida é a rota do acervo', async () => {
+    const espiao = responde({ vagas: [] })
+    vi.stubGlobal('fetch', espiao)
+
+    await lerAcervoRemoto()
+    expect(espiao.mock.calls[0][0]).toBe('/api/acervo')
+  })
 })
 
 describe('guardarVagasRemoto', () => {
@@ -93,6 +124,19 @@ describe('buscarVagaRemota', () => {
   test('404 devolve null em vez de lançar', async () => {
     vi.stubGlobal('fetch', responde({ message: 'não achei' }, { status: 404 }))
     expect(await buscarVagaRemota('sumida')).toBe(null)
+  })
+
+  /**
+   * O id da JSearch não é opaco por garantia nossa, e um id com `/` ou `#`
+   * montaria outra URL — 404 ou, pior, outra vaga. Sem alguém olhar a URL, a
+   * codificação pode sumir num refactor e a suíte inteira continua verde.
+   */
+  test('o id vai codificado na URL', async () => {
+    const espiao = responde({ id: 'a/b' })
+    vi.stubGlobal('fetch', espiao)
+
+    await buscarVagaRemota('a/b?x')
+    expect(espiao.mock.calls[0][0]).toBe('/api/acervo/a%2Fb%3Fx')
   })
 })
 
