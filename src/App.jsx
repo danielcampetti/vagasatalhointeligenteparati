@@ -3120,6 +3120,12 @@ export default function App() {
         setAcervoEstado('pronto')
       } catch (err) {
         if (!vivo) return
+        // `err.message` é o que vai para a tela — sempre português, por
+        // construção do `ErroAcervo`. `err.causa` é o texto cru de quem
+        // falhou (o `fetch` do navegador escreve em inglês, sempre), e fica
+        // só no console: um diagnóstico para quem desenvolve, nunca para a
+        // tela que existe para explicar a falha a quem usa.
+        console.warn('[acervo] falha ao carregar:', err.causa || err.message)
         setAcervoErro(err.message)
         setAcervoEstado('falhou')
       }

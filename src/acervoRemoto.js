@@ -20,10 +20,19 @@
 const BASE = '/api/acervo'
 
 export class ErroAcervo extends Error {
-  constructor(mensagem, { status = 0 } = {}) {
+  constructor(mensagem, { status = 0, causa = '' } = {}) {
     super(mensagem)
     this.name = 'ErroAcervo'
     this.status = status
+    /**
+     * O texto cru de quem falhou, para o console — nunca para a tela.
+     *
+     * A mensagem do `fetch` é fixada em inglês pelos browsers ("Failed to
+     * fetch" no Chromium), independentemente do idioma do usuário. Concatená-la
+     * na `message` punha inglês na única tela que existe para explicar a falha.
+     * Aqui ela continua disponível para diagnóstico sem chegar a quem lê.
+     */
+    this.causa = causa
   }
 }
 
@@ -40,7 +49,8 @@ async function ida(caminho, opcoes) {
     res = await fetch(`${BASE}${caminho}`, opcoes)
   } catch (err) {
     throw new ErroAcervo(
-      `Não foi possível falar com o servidor do acervo: ${err.message}`,
+      'Não foi possível falar com o servidor do acervo. Ele pode estar fora do ar.',
+      { causa: err.message },
     )
   }
 

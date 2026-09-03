@@ -38,6 +38,18 @@ describe('lerAcervoRemoto', () => {
     await expect(lerAcervoRemoto()).rejects.toBeInstanceOf(ErroAcervo)
   })
 
+  /**
+   * A mensagem do `fetch` é fixada em inglês pelos browsers ("Failed to
+   * fetch" no Chromium), não importa o idioma de quem usa. Ela não pode
+   * chegar à tela de falha — só ao `causa`, para quem lê o console.
+   */
+  test('a mensagem do fetch fica em causa, não vaza para a tela', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('Failed to fetch')))
+    const erro = await lerAcervoRemoto().catch((e) => e)
+    expect(erro.message).not.toMatch(/Failed to fetch/)
+    expect(erro.causa).toBe('Failed to fetch')
+  })
+
   test('status de erro lança ErroAcervo com o status', async () => {
     vi.stubGlobal('fetch', responde({ message: 'quebrou' }, { status: 500 }))
     await expect(lerAcervoRemoto()).rejects.toMatchObject({ status: 500 })
