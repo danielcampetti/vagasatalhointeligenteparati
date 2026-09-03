@@ -5,6 +5,7 @@
 import { createServer } from 'node:http'
 import { connect } from 'node:net'
 import { describe, expect, test } from 'vitest'
+import { abrirBanco, criarAcervo } from './banco'
 
 /**
  * Uma porta livre agora — o teste precisa falar de uma porta que ele controla.
@@ -70,7 +71,7 @@ describe('criarApp', () => {
 
   test('devolve um app do express, montado', async () => {
     const { criarApp } = await import('../../server.js')
-    const app = criarApp()
+    const app = criarApp({ acervo: criarAcervo(abrirBanco(':memory:')) })
     expect(typeof app.listen).toBe('function')
   })
 })

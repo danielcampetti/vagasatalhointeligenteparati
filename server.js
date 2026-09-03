@@ -37,11 +37,24 @@
 import express from 'express'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { abrirBanco, criarAcervo } from './src/servidor/banco.js'
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url))
 const DIST = path.join(AQUI, 'dist')
 
 const PORTA = process.env.PORT || 3000
+
+/**
+ * Onde o acervo mora.
+ *
+ * No Railway é um volume — o disco comum de lá é efêmero, e sem volume o banco
+ * morreria a cada deploy, que é exatamente o defeito que ele veio corrigir.
+ *
+ * Local, o padrão é um arquivo ao lado do código. O README promete que o
+ * `npm run dev` e o Railway se comportam igual, e exigir volume para rodar na
+ * máquina de quem desenvolve quebraria essa promessa.
+ */
+const BANCO_CAMINHO = process.env.BANCO_CAMINHO ?? path.join(AQUI, 'acervo.db')
 
 /**
  * Os dois destinos, na mesma forma que o `vite.config.js` usa.
@@ -146,7 +159,7 @@ function reproxiar(destino) {
  * colateral — e uma porta ocupada derrubava a suíte por um motivo que não
  * tinha nada a ver com o que estava sendo testado.
  */
-export function criarApp() {
+export function criarApp({ acervo = criarAcervo(abrirBanco(BANCO_CAMINHO)) } = {}) {
   const app = express()
 
   for (const destino of DESTINOS) {
@@ -158,6 +171,39 @@ export function criarApp() {
       reproxiar(destino),
     )
   }
+
+  /**
+   * O acervo compartilhado.
+   *
+   * Vem antes do estático porque `express.static` responderia 404 a
+   * `/api/acervo` antes de qualquer rota registrada depois dele. Não há
+   * `DELETE` — decisão do dono do projeto: nada é destruído no servidor.
+   */
+  const json = express.json({ limit: '10mb' })
+
+  app.get('/api/acervo', (_req, res) => {
+    res.json({ vagas: acervo.listar() })
+  })
+
+  app.get('/api/acervo/:id', (req, res) => {
+    const vaga = acervo.buscarPorId(req.params.id)
+    if (!vaga) return res.status(404).json({ message: 'Vaga não encontrada no acervo.' })
+    res.json(vaga)
+  })
+
+  app.post('/api/acervo', json, (req, res) => {
+    // Corpo sem `vagas` não é erro: um POST de lista vazia é o que a busca sem
+    // resultado manda, e recusá-lo com 400 viraria um aviso na tela por um
+    // não-evento.
+    const vagas = Array.isArray(req.body?.vagas) ? req.body.vagas : []
+    res.json({ vagas: acervo.guardar(vagas) })
+  })
+
+  app.patch('/api/acervo/:id', json, (req, res) => {
+    const vaga = acervo.atualizar(req.params.id, req.body ?? {})
+    if (!vaga) return res.status(404).json({ message: 'Vaga não encontrada no acervo.' })
+    res.json(vaga)
+  })
 
   app.use(express.static(DIST))
 
