@@ -2767,16 +2767,22 @@ function PainelControle({ cota, onZerar, onLimparCache, custo, onZerarCusto }) {
           {restantes === 1 ? 'requisição restante' : 'requisições restantes'} no
           ciclo
           {cota.desde ? `, iniciado em ${fmtDataHora(cota.desde, false)}` : ''}.
-          {' '}O plano gratuito renova pela data da assinatura, não pelo dia 1º —
-          zere a contagem à mão quando ele virar.
+          {' '}Este teto é nosso, não do provedor: o plano gratuito dá 200 por
+          mês, e {LIMITE_MENSAL} é o orçamento que decidimos vigiar. Estourá-lo
+          não bloqueia a busca — quem corta de verdade é o 429 da API, lá nas
+          200. O plano renova pela data da assinatura, não pelo dia 1º; zere a
+          contagem à mão quando ele virar.
         </div>
       </div>
 
-      {/* As 200 requisições acima têm teto do JSearch — quando acabam, acabam.
-          A Claude não tem teto do lado do provedor: ela só para quando o
-          cartão para. Por isso este cartão é separado, em dólar (não R$: uma
-          conversão exigiria cotação que o app não tem, e o número sairia
-          inventado), e o teto que aparece nele é nosso, local, não da API. */}
+      {/* Os dois tetos são nossos, mas param coisas diferentes — e é por isso
+          que continuam em cartões separados.
+          O de cima é um aviso: estourá-lo não impede requisição nenhuma,
+          porque quem barra a JSearch é o 429 dela, nas 200 do plano.
+          Este é um portão: bloqueia a chamada antes de ela sair, e precisa
+          ser, porque a Claude não tem teto do lado do provedor — ela só para
+          quando o cartão para. Em dólar e não em R$: uma conversão exigiria
+          cotação que o app não tem, e o número sairia inventado. */}
       <div style={cartao}>
         <div
           style={{
@@ -2816,9 +2822,11 @@ function PainelControle({ cota, onZerar, onLimparCache, custo, onZerarCusto }) {
           <strong style={{ color: '#E8ECF4', fontWeight: 600 }}>
             US$ {custo.teto.toFixed(2)}
           </strong>
-          . Diferente das 200 requisições acima, este teto não é do provedor —
-          é nosso, local a este navegador, e bloqueia a chamada antes de ela
-          sair. A Claude, do lado dela, aceitaria gastar sem limite.
+          . Como o teto de requisições acima, este é nosso e local a este
+          navegador — mas com uma diferença que importa: este **bloqueia** a
+          chamada antes de ela sair, enquanto aquele só avisa. Precisa
+          bloquear, porque a Claude, do lado dela, aceitaria gastar sem
+          limite.
         </div>
       </div>
 
