@@ -3,6 +3,7 @@
  */
 
 import { createServer } from 'node:http'
+import { connect } from 'node:net'
 import { describe, expect, test } from 'vitest'
 
 /**
@@ -14,6 +15,24 @@ async function portaLivre() {
   const { port } = sonda.address()
   await new Promise((ok) => sonda.close(ok))
   return port
+}
+
+/**
+ * Resolve com o código do erro, ou 'conectou' se alguém atendeu.
+ * Destrói o socket em ambos os casos para não deixar aberto.
+ */
+function sondarPorta(porta) {
+  return new Promise((ok) => {
+    const soquete = connect({ port: porta, host: '127.0.0.1' })
+    soquete.once('connect', () => {
+      soquete.destroy()
+      ok('conectou')
+    })
+    soquete.once('error', (err) => {
+      soquete.destroy()
+      ok(err.code)
+    })
+  })
 }
 
 describe('criarApp', () => {
@@ -29,7 +48,11 @@ describe('criarApp', () => {
    * O `server.js` tem um guard: só chama `listen` se `process.argv[1]` for
    * este arquivo. No vitest, `argv[1]` é o runner, não o server, então a
    * guarda falha e nenhuma porta se abre. Este teste verifica: após importar,
-   * a porta fica livre, porque o módulo não a escutou.
+   * ninguém atende nesta porta, porque o módulo não a escutou.
+   *
+   * A prova é por conexão, não por bind: o Windows deixa dar bind específico
+   * por cima de um wildcard, então o teste anterior passava com o defeito
+   * presente. Uma conexão detecta em qualquer OS.
    */
   test('importar o servidor não abre porta', async () => {
     const porta = await portaLivre()
@@ -39,19 +62,10 @@ describe('criarApp', () => {
     // é o runner do vitest, não o arquivo do servidor.
     await import('../../server.js')
 
-    // Se o módulo tivesse um listen() no topo sem guarda, ele teria escutado
-    // nesta porta. Bind bem-sucedido prova que ele não escutou.
-    const nosso = createServer()
-    let bindSucedeu = false
-    await new Promise((ok, falhou) => {
-      nosso.once('error', falhou)
-      nosso.listen(porta, '127.0.0.1', () => {
-        bindSucedeu = true
-        ok()
-      })
-    })
-    expect(bindSucedeu).toBe(true)
-    await new Promise((ok) => nosso.close(ok))
+    // Ninguém pode atender nesta porta. Um `listen` no topo do módulo teria
+    // escutado nela — e é por conexão, não por bind, que isso se detecta.
+    const resultado = await sondarPorta(porta)
+    expect(resultado).toBe('ECONNREFUSED')
   })
 
   test('devolve um app do express, montado', async () => {
