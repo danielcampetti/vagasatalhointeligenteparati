@@ -27,3 +27,7 @@ dist-ssr
 .env
 .env.local
 .env.*.local
+
+# Worktrees isolados de execução de plano. Um worktree aninhado e não
+# ignorado apareceria como diretório sujo no repositório que o contém.
+.claude/worktrees/
