@@ -138,33 +138,57 @@ function reproxiar(destino) {
   }
 }
 
-const app = express()
+/**
+ * Monta o servidor sem escutar.
+ *
+ * A separação existe para o teste poder importar este arquivo. Enquanto o
+ * `listen` acontecia no topo do módulo, importar abria uma porta como efeito
+ * colateral — e uma porta ocupada derrubava a suíte por um motivo que não
+ * tinha nada a ver com o que estava sendo testado.
+ */
+export function criarApp() {
+  const app = express()
 
-for (const destino of DESTINOS) {
-  app.use(
-    destino.de,
-    // Sem interpretar: o corpo é repassado byte a byte. Um `express.json()`
-    // aqui reserializaria o pedido da Claude e mudaria o que o upstream vê.
-    express.raw({ type: () => true, limit: '10mb' }),
-    reproxiar(destino),
-  )
+  for (const destino of DESTINOS) {
+    app.use(
+      destino.de,
+      // Sem interpretar: o corpo é repassado byte a byte. Um `express.json()`
+      // aqui reserializaria o pedido da Claude e mudaria o que o upstream vê.
+      express.raw({ type: () => true, limit: '10mb' }),
+      reproxiar(destino),
+    )
+  }
+
+  app.use(express.static(DIST))
+
+  /**
+   * Qualquer outra rota devolve o `index.html`.
+   *
+   * O app é uma página só, e a navegação dele é estado em memória — mas um F5
+   * ou um link colado precisa cair no HTML em vez de 404. Vem depois do
+   * estático, senão engoliria os pedidos de `/assets/*`.
+   */
+  app.use((_req, res) => res.sendFile(path.join(DIST, 'index.html')))
+
+  return app
 }
 
-app.use(express.static(DIST))
-
 /**
- * Qualquer outra rota devolve o `index.html`.
+ * Só escuta quando este arquivo é o ponto de entrada (`npm start`).
  *
- * O app é uma página só, e a navegação dele é estado em memória — mas um F5
- * ou um link colado precisa cair no HTML em vez de 404. Vem depois do
- * estático, senão engoliria os pedidos de `/assets/*`.
+ * Importado por um teste, `process.argv[1]` é o runner do vitest, a comparação
+ * falha, e nenhuma porta é aberta.
  */
-app.use((_req, res) => res.sendFile(path.join(DIST, 'index.html')))
+const ehPontoDeEntrada =
+  process.argv[1] &&
+  path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url))
 
-app.listen(PORTA, () => {
-  console.log(`[servidor] no ar na porta ${PORTA}`)
-  for (const d of DESTINOS) {
-    const tem = Boolean(process.env[d.variavel]?.trim())
-    console.log(`[${d.nome}] ${tem ? 'chave presente' : `SEM ${d.variavel}`}`)
-  }
-})
+if (ehPontoDeEntrada) {
+  criarApp().listen(PORTA, () => {
+    console.log(`[servidor] no ar na porta ${PORTA}`)
+    for (const d of DESTINOS) {
+      const tem = Boolean(process.env[d.variavel]?.trim())
+      console.log(`[${d.nome}] ${tem ? 'chave presente' : `SEM ${d.variavel}`}`)
+    }
+  })
+}
