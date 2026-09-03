@@ -157,5 +157,23 @@ export function criarAcervo(db, { teto = TETO } = {}) {
     return final
   }
 
-  return { listar, buscarPorId, guardar, atualizar }
+  /**
+   * Fecha o banco.
+   *
+   * Existe por dois motivos, e o segundo é o que não pode ser removido: além
+   * de ser a saída limpa para um banco em memória de teste, este método é a
+   * única coisa no objeto devolvido que fecha sobre o `db`.
+   *
+   * Sem ele, o objeto só referencia os *prepared statements*, e o
+   * `DatabaseSync` fica sem nenhuma referência viva. O GC então o coleta, o
+   * `node:sqlite` finaliza os statements junto, e toda operação passa a
+   * lançar "statement has been finalized" — em produção, 500 em todas as
+   * rotas até o processo reiniciar. Reproduzido em 03/09/2026 com
+   * `node --expose-gc`.
+   */
+  function fechar() {
+    db.close()
+  }
+
+  return { listar, buscarPorId, guardar, atualizar, fechar }
 }

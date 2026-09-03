@@ -2,6 +2,7 @@
  * @vitest-environment node
  */
 
+import { execFileSync } from 'node:child_process'
 import { beforeEach, describe, expect, test } from 'vitest'
 import { CAMPOS_PATCH, abrirBanco, criarAcervo } from './banco'
 
@@ -172,5 +173,63 @@ describe('teto', () => {
   test('uma leva maior que o teto entra cortada, sem estourar', () => {
     const pequeno = criarAcervo(abrirBanco(':memory:'), { teto: 2 })
     expect(pequeno.guardar(cheio(10))).toHaveLength(2)
+  })
+})
+
+/**
+ * Roda um `node` à parte, com `--expose-gc` — o vitest não liga essa flag por
+ * padrão, e um teste no mesmo processo que chamasse `global.gc()` sem ela
+ * seria pulado em silêncio. Já fomos pegos duas vezes por teste que passa com
+ * o defeito presente; este é o processo filho que evita ser a terceira.
+ */
+function construirEForcarGc() {
+  const urlDoBanco = new URL('./banco.js', import.meta.url).href
+  const script = `
+import { abrirBanco, criarAcervo } from '${urlDoBanco}'
+
+const acervo = criarAcervo(abrirBanco(':memory:'))
+acervo.guardar([{ id: 'a', cargo: 'Cargo a' }])
+
+global.gc()
+
+try {
+  acervo.listar()
+  console.log('SOBREVIVEU')
+} catch (err) {
+  console.log('LANCOU:' + err.message)
+}
+`
+  return execFileSync(
+    process.execPath,
+    ['--expose-gc', '--input-type=module', '-e', script],
+    { encoding: 'utf8' },
+  )
+}
+
+/**
+ * O defeito achado ao verificar a Task 6 à mão: `criarAcervo(db, ...)`
+ * devolvia um objeto que só referenciava os *prepared statements* — nunca o
+ * `db` em si. Sem nenhuma referência viva ao `DatabaseSync`, o V8 é livre
+ * para coletá-lo a qualquer momento, e o `node:sqlite` finaliza os statements
+ * junto: toda operação seguinte lança "statement has been finalized". Em
+ * produção (`criarApp({ acervo = criarAcervo(abrirBanco(BANCO_CAMINHO)) })`,
+ * sem nenhuma variável segurando o `db`) isso é 500 em todas as rotas até o
+ * processo reiniciar. Reproduzido em 03/09/2026 com `node --expose-gc`.
+ *
+ * `fechar` no objeto devolvido resolve isso sem ser um hack disfarçado de
+ * comentário: o motivo de existir é fechar sobre `db`, e isso por si só —
+ * nem precisa ser chamado — mantém o banco vivo enquanto o acervo existir.
+ */
+describe('fechar — o banco não pode depender de sorte com o GC', () => {
+  test('mesmo sem chamar fechar, sua existência no objeto evita a coleta do db', () => {
+    const saida = construirEForcarGc()
+    expect(saida).toContain('SOBREVIVEU')
+  })
+
+  test('chamar fechar fecha o banco de verdade: operações depois lançam', () => {
+    const local = criarAcervo(abrirBanco(':memory:'))
+    local.guardar([vaga('a')])
+    local.fechar()
+    expect(() => local.listar()).toThrow()
   })
 })
