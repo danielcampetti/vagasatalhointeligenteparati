@@ -229,7 +229,14 @@ export function criarAcervo(db, { teto = TETO } = {}) {
       aparar.run(teto)
       db.exec('COMMIT')
     } catch (err) {
-      db.exec('ROLLBACK')
+      // O `ROLLBACK` vai em try próprio para o erro dele — banco já fechado,
+      // transação já desfeita — não substituir o erro de verdade, que é o que
+      // diz qual vaga derrubou a leva.
+      try {
+        db.exec('ROLLBACK')
+      } catch {
+        // Desfazer já falhou; quem manda é o erro original.
+      }
       throw err
     }
 
@@ -257,6 +264,13 @@ export function criarAcervo(db, { teto = TETO } = {}) {
    * torna isso verdade em vez de intenção: `fav` e `seen` só ligam, `rank`
    * ausente não apaga o antigo, e `descricao` — que o PATCH nunca manda —
    * sobrevive por construção.
+   *
+   * A consequência a saber de cor: **o PATCH não desliga marca**. Hoje não
+   * custa nada, porque o único chamador é o `seen` de `abrirVaga` e o
+   * "Favoritar" saiu do menu. Mas se um dia existir "Desfavoritar", ele não
+   * funciona por aqui — o desligar teria que ser uma operação própria, e
+   * decidir se desligar o favorito de todo mundo é o comportamento desejado
+   * num acervo compartilhado é uma pergunta para o dono do projeto.
    */
   function atualizar(id, campos = {}) {
     const atual = bruta(id)
