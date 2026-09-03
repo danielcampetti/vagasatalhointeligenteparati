@@ -48,7 +48,7 @@ export const TETO = 500
 
 const CHAVE = 'vagas:acervo'
 
-const VAZIO = { vagas: [], semeado: false }
+const VAZIO = { vagas: [], semeado: false, migrado: false }
 
 /**
  * O acervo inteiro, ou vazio quando ilegível.
@@ -65,6 +65,7 @@ export function lerAcervo() {
     return {
       vagas: Array.isArray(dados?.vagas) ? dados.vagas : [],
       semeado: dados?.semeado === true,
+      migrado: dados?.migrado === true,
     }
   } catch {
     return { ...VAZIO, vagas: [] }
@@ -167,4 +168,32 @@ export function semear(doCache) {
 
   gravar({ ...acervo, semeado: true })
   return guardarVagas(doCache)
+}
+
+/**
+ * O que ainda não subiu para o servidor.
+ *
+ * Depois de `marcarMigrado`, devolve vazio para sempre — sem isso o acervo
+ * local voltaria a subir a cada carga, e qualquer coisa que o servidor fizesse
+ * com aquelas vagas seria desfeita na sessão seguinte. É o mesmo mecanismo do
+ * `semeado`, pelo mesmo motivo.
+ */
+export function lerParaMigrar() {
+  const acervo = lerAcervo()
+  return acervo.migrado ? [] : acervo.vagas
+}
+
+/**
+ * Fecha a migração.
+ *
+ * **Não apaga o acervo local**, só o marca. Se a subida der errado do outro
+ * lado, o dado ainda está aqui para ser reenviado à mão — e apagá-lo seria
+ * trocar um backup de graça por nada.
+ *
+ * Acervo vazio marca assim mesmo, senão a migração ficaria armada para
+ * disparar mais tarde, despejando um acervo velho dentro de um servidor que já
+ * tem vida própria.
+ */
+export function marcarMigrado() {
+  return gravar({ ...lerAcervo(), migrado: true })
 }

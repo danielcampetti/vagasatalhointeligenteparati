@@ -4,7 +4,9 @@ import {
   atualizarNoAcervo,
   guardarVagas,
   lerAcervo,
+  lerParaMigrar,
   limparAcervo,
+  marcarMigrado,
   removerDoAcervo,
   semear,
 } from './acervo'
@@ -257,5 +259,51 @@ describe('defesas', () => {
     } finally {
       Storage.prototype.setItem = original
     }
+  })
+})
+
+/**
+ * A migração sobe o acervo que já está no `localStorage` para o servidor, uma
+ * vez só.
+ *
+ * A marca é a parte que importa, e o precedente é o próprio `semeado`: sem
+ * ela, o local voltaria a subir a cada carga, e qualquer coisa que o servidor
+ * fizesse com aquelas vagas seria desfeita na sessão seguinte.
+ */
+describe('migração para o servidor', () => {
+  test('a primeira leitura entrega o que estava guardado', () => {
+    guardarVagas([vaga('a'), vaga('b')])
+    expect(lerParaMigrar()).toHaveLength(2)
+  })
+
+  test('depois de marcada, não entrega mais nada', () => {
+    guardarVagas([vaga('a')])
+    marcarMigrado()
+    expect(lerParaMigrar()).toEqual([])
+  })
+
+  test('a marca sobrevive ao recarregar', () => {
+    guardarVagas([vaga('a')])
+    marcarMigrado()
+    expect(lerAcervo().migrado).toBe(true)
+  })
+
+  // Sem acervo local não há o que migrar, mas a marca tem que ser posta assim
+  // mesmo — senão a migração fica armada para disparar mais tarde, despejando
+  // um acervo velho dentro de um servidor que já tem vida própria.
+  test('acervo vazio marca assim mesmo', () => {
+    expect(lerParaMigrar()).toEqual([])
+    marcarMigrado()
+    expect(lerAcervo().migrado).toBe(true)
+  })
+
+  /**
+   * O local não é apagado, só marcado. Se a migração der errado do outro lado,
+   * o dado ainda está aqui para ser reenviado à mão.
+   */
+  test('marcar não apaga o acervo local', () => {
+    guardarVagas([vaga('a')])
+    marcarMigrado()
+    expect(lerAcervo().vagas).toHaveLength(1)
   })
 })
