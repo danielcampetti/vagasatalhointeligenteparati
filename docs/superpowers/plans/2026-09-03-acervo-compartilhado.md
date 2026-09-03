@@ -1001,7 +1001,45 @@ export function criarApp({ acervo = criarAcervo(abrirBanco(BANCO_CAMINHO)) } = {
 Run: `npx vitest run src/servidor/rotas.test.js`
 Expected: PASS — 9 testes
 
-- [ ] **Step 5: Ignorar o banco local no git**
+- [ ] **Step 5: Tirar o efeito colateral do teste da Task 3**
+
+`src/servidor/app.test.js` chama `criarApp()` sem argumento. Com o padrão que
+o Step 3 acabou de dar ao parâmetro, essa chamada passaria a **abrir o banco
+real** — criando um `acervo.db` no repositório como efeito colateral de rodar
+a suíte.
+
+Troque as duas chamadas do arquivo por uma com acervo em memória:
+
+```js
+import { describe, expect, test } from 'vitest'
+import { criarApp } from '../../server.js'
+import { abrirBanco, criarAcervo } from './banco'
+
+/**
+ * O `server.js` chamava `app.listen` no topo do módulo. Importá-lo abriria uma
+ * porta como efeito colateral do import — e uma porta já ocupada derrubaria a
+ * suíte inteira por um motivo sem relação nenhuma com o que se testa.
+ *
+ * Este teste existe para travar a propriedade: importar não escuta.
+ */
+describe('criarApp', () => {
+  test('importar o servidor não abre porta', () => {
+    expect(typeof criarApp).toBe('function')
+  })
+
+  // Com acervo em memória de propósito: o padrão do parâmetro abre o banco do
+  // ambiente, e um teste não pode criar arquivo no repositório.
+  test('devolve um app do express, montado', () => {
+    const app = criarApp({ acervo: criarAcervo(abrirBanco(':memory:')) })
+    expect(typeof app.listen).toBe('function')
+  })
+})
+```
+
+Confirme que nenhum arquivo nasceu: `git status --short` não pode listar
+`acervo.db` depois de rodar a suíte.
+
+- [ ] **Step 6: Ignorar o banco local no git**
 
 Adicione ao `.gitignore`:
 
@@ -1010,12 +1048,12 @@ acervo.db
 acervo.db-journal
 ```
 
-- [ ] **Step 6: Suíte, lint e commit**
+- [ ] **Step 7: Suíte, lint e commit**
 
 ```bash
 npm test -- --run
 npm run lint
-git add server.js .gitignore src/servidor/rotas.test.js
+git add server.js .gitignore src/servidor/rotas.test.js src/servidor/app.test.js
 git commit -m "Rotas do acervo: GET, GET/:id, POST e PATCH — e nenhum DELETE
 
 Quatro rotas finas sobre o banco.js. O GET corta a descrição, que é 66%
@@ -1577,10 +1615,10 @@ e o parágrafo:
             {/* Dizer que falhou, e não mostrar uma tela de vazio: acervo vazio
                 por queda de rede é idêntico a acervo vazio de verdade, e o
                 conselho "faça uma busca" mandaria gastar cota à toa. */}
-            O acervo vive no servidor, e ele não respondeu. {acervoErro}
+            O acervo vive no servidor, e ele não respondeu. {erro}
             <div style={{ marginTop: 12 }}>
               <button
-                onClick={() => setTentativa((n) => n + 1)}
+                onClick={onTentarDeNovo}
                 className="bg-[#0E1729] text-[#C8D1E0] hover:bg-[#152039]"
                 style={{
                   padding: '8px 14px',
@@ -1608,7 +1646,30 @@ e o parágrafo:
         )}
 ```
 
-Passe `estado={acervoEstado}`, `erro={acervoErro}` e `onTentarDeNovo={() => setTentativa((n) => n + 1)}` de onde o componente é usado, e declare-os na assinatura dele.
+O componente hoje é `function AcervoVazio({ filtrando, onLimpar })` (linha
+~1237). Troque a assinatura por:
+
+```js
+function AcervoVazio({ filtrando, onLimpar, estado, erro, onTentarDeNovo }) {
+```
+
+E no lugar onde ele é usado, passe os três novos:
+
+```jsx
+  estado={acervoEstado}
+  erro={acervoErro}
+  onTentarDeNovo={() => setTentativa((n) => n + 1)}
+```
+
+**Os nomes têm que ser os das props, não os do `App`.** `acervoErro` e
+`setTentativa` são estado do `App` e não existem dentro do `AcervoVazio` —
+usá-los ali é `ReferenceError` em tempo de render, e o React derruba a aba
+inteira.
+
+Ajuste também o docstring do componente, que hoje afirma *"O acervo é local:
+um vazio dele nunca é culpa de uma requisição"*. Depois desta mudança a frase
+está errada — passou a ser exatamente a causa possível que o estado `falhou`
+existe para nomear.
 
 - [ ] **Step 9: O rótulo da nota compartilhada**
 
