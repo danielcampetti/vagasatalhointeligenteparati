@@ -17,19 +17,7 @@
 import { JANELA_PADRAO, apiDaJanela } from './janela'
 import { MODALIDADE_PADRAO, soRemotas } from './modalidade'
 
-/**
- * O teto de requisições que o app vigia por mês.
- *
- * **Não é o limite do provedor.** A OpenWeb Ninja dá 200 no plano gratuito, e
- * continua dando — é o que a mensagem do 429 diz, e ela segue correta. Este
- * número é um orçamento auto-imposto, menor de propósito, e vive aqui para o
- * painel Controle avisar antes de o provedor cortar.
- *
- * A distinção importa para quem for mexer: subir este valor não compra
- * requisição nenhuma, e baixá-lo não impede a busca de acontecer — ele move o
- * aviso, não o portão. Quem de fato barra é o 429 da API, lá nas 200.
- */
-export const LIMITE_MENSAL = 50
+export const LIMITE_MENSAL = 200
 
 const CHAVE = 'vagas:cota'
 
