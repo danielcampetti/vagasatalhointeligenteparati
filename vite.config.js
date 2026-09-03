@@ -61,11 +61,19 @@ export default defineConfig(({ mode }) => {
   }
 
   return {
-    // `base` precisa ser exatamente "/<nome-do-repositorio>/".
-    // O site é servido em https://<usuario>.github.io/vagasatalhointeligenteparati/,
-    // então sem isso o HTML pede /assets/... na raiz do domínio, o CSS e o JS
-    // retornam 404 e a página abre sem estilo nenhum.
-    base: '/vagasatalhointeligenteparati/',
+    // O caminho onde o app é servido, e ele difere por destino — por isso
+    // virou variável em vez de constante.
+    //
+    // No GitHub Pages o site fica em
+    // https://<usuario>.github.io/vagasatalhointeligenteparati/, e `base`
+    // precisa ser exatamente "/<nome-do-repositorio>/": sem isso o HTML pede
+    // /assets/... na raiz do domínio, o CSS e o JS retornam 404 e a página
+    // abre sem estilo nenhum. É o padrão porque é o caso que quebra calado.
+    //
+    // No Railway o app tem o domínio inteiro para si, então lá vai `/` —
+    // definido em BASE_PATH no ambiente do build. Manter o subcaminho ali
+    // produziria o mesmo 404 de assets, só que na outra direção.
+    base: process.env.BASE_PATH ?? '/vagasatalhointeligenteparati/',
     plugins: [
       react(),
       tailwindcss(),

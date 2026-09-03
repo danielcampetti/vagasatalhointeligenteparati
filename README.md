@@ -8,22 +8,43 @@ ranking de compatibilidade ("Rank IA") e a tela de configuração da avaliação
 
 ![Tela de vagas do protótipo](docs/print.png)
 
-## ⚠️ A busca só funciona em `npm run dev`
+## ⚠️ Onde a busca funciona, e onde não
 
-O protótipo deixou de ser frio: **a aba Vagas consulta a API de verdade**. Mas
-isso vale apenas em desenvolvimento, e a razão é estrutural.
+A chave da API não pode ir para o navegador. Uma chave dentro do bundle é
+pública: qualquer um abre o DevTools e queima as suas 200 requisições. Por isso
+ela nunca é `VITE_*` — fica onde só o servidor enxerga, e o navegador chama
+`/api/jsearch/...` na própria origem, sem saber de chave nenhuma.
 
-A chave da API não pode ir para o navegador. Este site é **estático** — o deploy
-roda `npm run build` e publica `dist/` no GitHub Pages, sem servidor nenhum. Uma
-chave dentro do bundle é pública: qualquer um abre o DevTools e queima as suas
-200 requisições. Então a chave fica num `.env` local que **só o proxy do dev
-server enxerga**; o navegador chama `/api/jsearch/...`, mesma origem, e quem
-acrescenta o header `x-api-key` é o Vite.
+Quem põe o header `x-api-key` depende de onde o app está rodando, e são três
+casos diferentes:
 
-**Consequência:** no site publicado não existe esse proxy. `/api/jsearch`
-responde 404 e a busca falha. Para a busca funcionar em produção é preciso um
-endpoint que guarde a chave fora do navegador — uma função serverless, por
-exemplo. Isso ainda não existe.
+| Onde | Quem guarda a chave | Busca e Avaliação IA |
+|---|---|---|
+| `npm run dev` | o proxy do Vite (`vite.config.js`) | funcionam |
+| **Railway** | o `server.js` | **funcionam** |
+| GitHub Pages | ninguém — é estático | `/api/jsearch` dá 404 |
+
+O `server.js` é o endpoint que este README passou muito tempo dizendo que
+faltava. Ele serve o `dist/` e reproxia os dois prefixos com as chaves vindas
+das variáveis de ambiente do Railway, espelhando o que o dev server faz —
+mesmos prefixos, mesma reescrita, mesmos headers de "sem chave". O app publicado
+se comporta como o local de propósito: divergir criaria defeito que só aparece
+em produção.
+
+O GitHub Pages continua no ar e continua sem busca. É a vitrine estática; o
+Railway é a versão que funciona.
+
+### O app publicado não tem autenticação
+
+Decisão consciente de quem publicou, registrada aqui para não virar surpresa:
+**quem abrir a URL do Railway usa as chaves do servidor.** Isso significa as 200
+requisições/mês da JSearch e os créditos Anthropic da Avaliação IA, que custam
+dinheiro de verdade (ver "Quanto uma avaliação custa"). O repositório é público,
+então o link é fácil de achar.
+
+Se um dia isso incomodar, o lugar de resolver é o `server.js`: um `if` no topo
+de `reproxiar` conferindo um segredo do ambiente já barra o uso alheio sem
+tocar em mais nada.
 
 O que continua sendo frio:
 
@@ -498,18 +519,50 @@ npm run lint      # oxlint
 
 ## Deploy
 
+São dois destinos, e eles servem para coisas diferentes.
+
+### Railway — a versão que funciona
+
+`npm start` roda o `server.js`, que serve o `dist/` e reproxia as APIs. O
+Railway precisa de duas variáveis de ambiente:
+
+```
+JSEARCH_API_KEY     a mesma do .env
+ANTHROPIC_API_KEY   a mesma do .env
+BASE_PATH=/         no build
+```
+
+`BASE_PATH` é o que impede a página abrir sem CSS. O padrão do `vite.config.js`
+é `/vagasatalhointeligenteparati/`, que é o subcaminho do GitHub Pages; no
+Railway o app tem o domínio inteiro para si e precisa de `/`. Errar isso faz o
+HTML pedir os assets no lugar errado e receber 404 — o mesmo defeito nos dois
+destinos, em direções opostas.
+
+Para rodar o build de produção localmente antes de publicar:
+
+```bash
+BASE_PATH=/ npm run build && npm start
+```
+
+(No Git Bash do Windows, `BASE_PATH=/` vira `/Program Files/Git` pela conversão
+de caminho do MSYS. Use PowerShell — `$env:BASE_PATH='/'` — ou
+`MSYS_NO_PATHCONV=1`.)
+
+### GitHub Pages — a vitrine estática
+
 Push na branch `main` → o workflow `.github/workflows/deploy.yml` faz o build e
 publica no GitHub Pages. Também dá para disparar na mão em
 **Actions → Deploy no GitHub Pages → Run workflow**.
 
 Em **Settings → Pages**, o *source* é **GitHub Actions**.
 
-Um detalhe importante para não quebrar: em `vite.config.js`,
-`base: '/vagasatalhointeligenteparati/'` precisa ser exatamente o nome do
-repositório. Se o repositório for renomeado e o `base` não acompanhar, a página
-abre sem CSS nenhum (o HTML procura os assets na raiz do domínio e recebe 404).
-O `public/.nojekyll` existe para o Pages não ignorar arquivos e pastas que
+O workflow não define `BASE_PATH`, então cai no padrão `/vagasatalhointeligenteparati/`
+— que precisa ser exatamente o nome do repositório. Se o repositório for
+renomeado e o padrão não acompanhar, a página abre sem CSS nenhum. O
+`public/.nojekyll` existe para o Pages não ignorar arquivos e pastas que
 começam com `_`.
+
+Lá a busca não funciona: não há servidor para guardar a chave.
 
 ## Estrutura
 
