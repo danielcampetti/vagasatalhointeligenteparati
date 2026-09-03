@@ -1,46 +1,120 @@
-# Onde paramos — 02/09/2026
+# Onde paramos — 03/09/2026
 
 Retomada rápida do protótipo VAGAS. O **README.md** explica *como as coisas
 funcionam*; este arquivo diz *em que pé estão* e *o que fazer a seguir*.
 
-> **Como ler:** o bloco abaixo é o estado de hoje. Depois dele vem o diário do
-> dia 02/09, do mais recente para o mais antigo — é onde estão as medições e o
+> **Como ler:** o bloco abaixo é o estado de hoje. Depois dele vem o diário —
+> 03/09 primeiro, depois 02/09 —, do mais recente para o mais antigo — é onde estão as medições e o
 > **porquê** de cada mudança. As seções estruturais ("O que funciona hoje",
 > "Decisões já tomadas", "Pendências", "Armadilhas") vêm no fim e valem para
 > qualquer retomada.
 
 ---
 
-## Onde estamos agora — 02/09/2026
+## Onde estamos agora — 03/09/2026
 
-**Seis commits hoje**, todos no `main` local, working tree limpo. Para o
-número exato à frente do remoto: `git rev-list --count origin/main..main`.
+**O app está no ar, com banco de verdade.**
+`https://vagas-atalho-inteligente-para-ti.up.railway.app`
 
-    af24166  Listagem: a coluna Status virou "Ver Vaga", com link para o anúncio
-    ea64f9a  Buscar: uma página, e o botão serve as seguintes do cache
-    b433a6b  Carregar mais: manda só as vagas novas, com âncora de escala
-    4f85abc  README/ONDE-PARAMOS: a janela, o custo do pensamento e o dashboard
-    a419468  ranking: o effort nunca era enviado, e o padrão da API é "high"
-    ab00cd2  Aba Vagas: janela de publicação, contra vaga encerrada e vaga velha
+Dois trabalhos hoje, e o segundo mudou a arquitetura:
 
-O dia inteiro foi **medição contra a API real**, não leitura de código. O que
-mudou, em uma linha cada:
+**1. O painel Controle contava errado.** Mostrava 3/200 com 50 requisições
+gastas na conta. A contagem saía de `usos`, o histórico da tela, que é cortado
+nas últimas 50 entradas — e busca servida do cache entra na mesma lista que
+busca de rede, então cada repetição empurrava uma requisição paga para fora do
+corte. O número não só errava: **encolhia sozinho**, e encolhia justamente
+quando o app acertava. Corrigido separando `totais` (contagem, sem teto) de
+`usos` (tela, com teto), e o painel ganhou "Ajustar" para casar com o número do
+provedor.
 
-| | antes | agora |
+**2. O acervo saiu do navegador e virou banco no servidor.** Era a mudança
+maior: até hoje o app não guardava nada fora do `localStorage`, e o `server.js`
+era um proxy que não escrevia em disco. Agora as vagas vivem num SQLite num
+volume do Railway, e **toda busca — de quem quer que seja — alimenta o mesmo
+acervo**.
+
+Testes: **398** (eram 301 no começo do dia). Lint limpo fora do aviso
+pré-existente em `perfil.test.js`. Build OK.
+
+**O trabalho agora é publicado.** A decisão de 28/08 de manter tudo local caiu
+hoje — ver "Decisões já tomadas".
+
+---
+
+## 03/09 (noite) — o acervo virou banco no servidor
+
+Executado como plano de oito tarefas com subagentes, cada uma com revisão
+própria, mais uma revisão da branch inteira no fim. Spec e plano em
+`docs/superpowers/`. O resumo do desenho:
+
+| | onde estava | onde está |
 |---|---|---|
-| vagas sem data na busca | 5 de 10 | 0 de 10 |
-| espera do "Avaliando N vagas" | ~28s | ~7–19s |
-| custo de uma busca | $0,0486 | $0,0289 |
-| custo de "Carregar mais" | ~$0,0399 | $0,0157 |
-| "Buscar" depois de paginar | devolvia a lista acumulada | devolve uma página |
-| coluna Status | pílula "Ativa" em toda linha | link para o anúncio |
+| vagas | `localStorage`, por navegador | SQLite em `/dados/acervo.db`, no volume |
+| marcas (`fav`, `seen`, `rank`) | idem | idem — tudo compartilhado, um store só |
+| regra de mescla | dentro do `acervo.js` | `src/vaga.js`, roda nos dois lados |
+| apagar | `removerDoAcervo`, sem botão | **não existe rota `DELETE`** |
 
-Testes: **202** (`npm test`). Lint limpo fora de um aviso pré-existente em
-`perfil.test.js`. Build OK.
+A tabela do banco tem três colunas — `id`, `entrouEm` e a vaga inteira em JSON
+—, e não vinte. O motivo está na lição que já custou duas colunas vazias:
+"nomes de campo da API: confira, não deduza". Com colunas enumeradas, cada
+campo novo no `mapear.js` viraria migração de schema.
 
-**Continua tudo local, sem push** — decisão de 28/08, reafirmada hoje. Um push
-no `main` dispara o deploy do GitHub Pages (`on: push: branches: [main]`), e o
-site publicado tem busca e Avaliação IA mortas: não há proxy em produção.
+### As três coisas que teriam ido para produção quebradas
+
+Nenhuma seria pega rodando a suíte. Todas foram confirmadas rodando, antes e
+depois do conserto.
+
+**O `DatabaseSync` era coletado pelo GC.** O `criarAcervo` devolvia closures
+sobre os *prepared statements*, mas nada referenciava o banco. Sem referência
+viva o GC o coletava, o `node:sqlite` finalizava os statements junto, e **toda
+rota passava a devolver 500 até o processo reiniciar**. Reproduzido com
+`node --expose-gc`: `"statement has been finalized"`. O conserto é o `fechar()`,
+cuja closure segura o `db` — e ele **não pode ser apagado por parecer sem uso**,
+que é justamente o risco que o teste com subprocesso agora trava.
+
+**Marcar uma vaga como lida apagava a nota paga de outra pessoa.** O `PATCH`
+gravava os campos direto, sem passar pelo `mesclar`, e o cliente mandava as três
+marcas incondicionalmente — sendo que toda vaga nasce com `rank: null` no
+`mapear.js`. Abrir uma vaga que outra pessoa tinha avaliado zerava a nota dela.
+Consertado nas duas pontas: o `atualizar` passou a usar o `mesclar`, e o cliente
+manda só o que mudou.
+
+**Uma data no futuro derrotava o teto.** O `entrouEm` vinha do cliente e é a
+chave de descarte. Uma vaga postada com `entrouEm: '9999-12-31'` ficava em
+primeiro para sempre; 2000 delas apagariam o acervo inteiro, de forma
+permanente, pela única rota de escrita que existe. Agora só se aceita data que
+não seja futura.
+
+### O que a revisão final pegou que as revisões por tarefa não podiam
+
+As sete revisões de tarefa passaram. Os defeitos acima só aparecem olhando o
+conjunto — e mais dois:
+
+- **`npm run dev` não alcançava `/api/acervo`.** O `vite.config.js` proxiava só
+  a JSearch e a Claude. Não foi pego porque **toda** verificação rodou
+  `node server.js` contra o `dist/` construído; o acervo nunca foi exercitado no
+  modo em que se desenvolve. Corrigido com um plugin que monta as mesmas rotas.
+- **Um 200 com corpo que não é JSON virava acervo vazio.** O catch-all da SPA
+  responde `index.html` para qualquer rota desconhecida, então um dia em que
+  alguém renomeasse a rota o acervo apareceria vazio, com a tela aconselhando
+  "faça uma busca" — que gastaria cota para consertar um problema que não é de
+  cota.
+
+### O que ficou aberto de propósito
+
+- **Só a `descricao` tem teto de tamanho.** Os outros campos não têm — e são
+  justamente os que a lista envia. Medido: um POST anônimo compra 1,43 MB de
+  peso permanente na resposta. Um teto de tamanho total por vaga fecharia o que
+  o limite de 2 MB por requisição não fecha.
+- **Um reparo que não repara.** O `ON CONFLICT` nunca atualiza a *coluna*
+  `entrouEm`, só o JSON, então o código que tenta consertar uma linha
+  envenenada não a conserta — e o comentário afirmando o contrário está errado.
+  Impacto prático hoje é zero: o caminho de INSERT está selado e o volume
+  nasceu limpo.
+- **O `src/acervo.js` não encolheu.** A spec dizia "reduzido à fonte da
+  migração", mas o store de `localStorage` inteiro sobreviveu sem chamador de
+  produção — ~150 linhas mais os testes que as exercitam. Foi escalado em vez
+  de adivinhado, e é limpeza, não defeito.
 
 ---
 
@@ -363,14 +437,17 @@ gerou — e os 7 do topo são o trabalho de 28/08: a correção do Rank IA, a li
 que passou a esperar o ranking, o detalhe que abre também da Vaga Inteligente,
 a linha clicável da tabela, o "Carregar mais vagas", e este documento.
 
-**Nada disso está no remoto — e isso é decisão, não esquecimento.** Em 28/08
-ficou combinado manter o trabalho só nesta máquina por enquanto; não publique
-sem pedir. O `main` local está dezenas de commits à frente do `origin/main` —
-para o número de agora, `git rev-list --count origin/main..main`.
+**Isto mudou em 03/09: o trabalho agora é publicado.** O `main` é empurrado
+para o `origin` e o Railway faz deploy dele automaticamente. O parágrafo que
+estava aqui dizia o contrário — que nada ia para o remoto e que não se devia
+publicar sem pedir — e valeu de 28/08 até hoje, pelo motivo certo: o site
+publicado tinha busca e Avaliação IA mortas, porque não havia proxy em
+produção. O `server.js` resolveu isso.
 
-O risco continua existindo e vale reavaliar de vez em quando: dias de trabalho
-sem cópia fora daqui. Mas quem decide quando publicar é o dono do repositório,
-e a resposta atual é "ainda não".
+O risco antigo (dias de trabalho sem cópia fora daqui) acabou. O novo é outro,
+e está no README: **quem abrir a URL usa as chaves do servidor** — as 200
+requisições/mês da JSearch e os créditos Anthropic. Desde 03/09 também escreve
+no acervo compartilhado.
 
 > O número não está escrito aqui de propósito. Ele já ficou errado **três
 > vezes** neste documento, e a causa é sempre a mesma: um contador que muda a
@@ -583,6 +660,12 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 
 | Decisão | Por quê |
 |---|---|
+| O acervo é compartilhado: vaga **e** marcas no servidor | Decidido em 03/09. Um store só, sem login. A consequência foi pesada e aceita: a nota da Claude aparece para quem tem outro currículo, medindo compatibilidade com o de outra pessoa — por isso a tela ganhou o rótulo dizendo isso, em vez de esconder a nota |
+| **Nada é destruído no servidor** — não existe rota `DELETE` | Decidido em 03/09. Satisfeito por ausência de código, e há um teste que confere a ausência da rota: sem ele alguém a acrescentaria "por completude" numa manutenção futura. Se um dia existir um botão "Remover", ele esconde da tela de quem clicou. **Ressalva honesta:** o teto ainda apaga de verdade, então a decisão vale para a *rota*, não para o dado |
+| SQLite via `node:sqlite` num volume, não Postgres | Decidido em 03/09. Zero dependência nova — vem embutido no Node 22.14, o mesmo que o Railway roda. Custa um `ExperimentalWarning` no log para sempre. Postgres seria a resposta se o acervo crescesse muito além de algumas centenas de vagas |
+| O acervo **não** é consultado antes da busca para poupar cota | Decidido em 03/09. A busca continua indo à API como sempre; o banco só recebe o que ela trouxe. Dá para fazer depois sem refazer nada — mudaria a semântica da busca (o que é "recente o bastante"?) e dobraria o escopo |
+| O `PATCH` não consegue desligar um marcador | Consequência do conserto de 03/09 que fez o `PATCH` passar pelo `mesclar`, cujo contrato é "marca só liga, nota paga não se apaga". Inofensivo hoje: só `seen` é escrito. Um futuro "Desfavoritar" precisa de outro mecanismo, e a pergunta que vem junto não é técnica: **desfavoritar deveria apagar o favorito de todo mundo?** |
+| Uma réplica no Railway, e só uma | Um processo, uma conexão, sem `busy_timeout`. Escalar para 2 réplicas no mesmo volume produz `SQLITE_BUSY` sem retry. Documentado no README, e nada no código impede — "aumentar réplicas" parece inofensivo e não é |
 | Cargo é texto livre; cidade é lista fechada | Cargo errado devolve resultado ruim; cidade errada não devolve nada |
 | **Nenhum recorte local de cargo ou cidade** (data é exceção, ver acima) | Quem filtra é a API. O recorte por cidade saiu junto com o mock: a JSearch escreve "Caxias Do Sul" ou devolve municípios vizinhos, e nada disso bate com o rótulo exato do IBGE — comparar de novo derrubava vaga legítima. Sobrou ordenação e paginação |
 | Sem filtros sobre o resultado — **exceto data** | Tecnologia, empresa, modalidade e status foram removidos de propósito. A **janela de publicação** entrou em 02/09 e é a única exceção: ela não é conveniência de tela, é o remédio para as duas queixas de vaga encerrada e vaga velha, e o corte precisa acontecer também no cliente porque a API não honra `week` |
@@ -597,7 +680,7 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 | `.doc` não é mais aceito no upload | Sem servidor não há como abrir Word binário (formato OLE) no navegador. Uma textarea de colar texto cobre `.doc`, `.odt`, exportação do LinkedIn e qualquer outro formato — `.pdf` e `.docx` continuam indo por upload de arquivo |
 | ~~"Carregar mais" reranqueia tudo~~ — **revisto em 02/09** | Era: lote menor que a lista a partiria em escalas independentes (medido: 9,1 pontos de diferença média), e "reranquear junto custa quase o mesmo, continua uma chamada". **As duas metades caíram.** O custo: a segunda chamada custou 41% mais que a primeira (10.086 → 17.668 tokens), e numa sessão de três cliques o sobrecusto era de 102%. A premissa: os 9,1 pontos foram medidos sem piso de ruído — duas chamadas *idênticas* divergem 6,8, então o dano do fatiamento era ~2,3, não 9,1. E a condição "enquanto couber em `TAMANHO_LOTE`" se quebrava no 3º clique, quando 40 vagas viram dois lotes e as escalas se misturavam de qualquer jeito. Hoje só as vagas novas viajam, com âncora de escala |
 | `TAMANHO_LOTE` continua 30 | O teto por chamada segue valendo; o que mudou é que a lista raramente chega perto dele, porque cada "Carregar mais" só manda a página nova |
-| O trabalho fica só na máquina local, sem push | Decidido em 28/08. O `origin/main` segue anterior à busca real da JSearch, e publicar é escolha do dono do repositório — não faça por iniciativa própria ao ler o aviso de risco acima |
+| ~~O trabalho fica só na máquina local, sem push~~ — **revisto em 03/09** | Era: publicar é escolha do dono, e o `origin/main` seguia anterior à busca real. Caiu porque o `server.js` passou a existir e o Railway passou a ser a versão que funciona — o motivo original da decisão (o site publicado tinha busca e Avaliação IA mortas, sem proxy em produção) deixou de ser verdade. Hoje o `main` é empurrado e o Railway faz deploy dele. O que **não** mudou: quem decide o que vai para o ar continua sendo o dono, e o push carrega chaves de API expostas a quem abrir a URL |
 | A tela acumula resultados em vez de paginar contra a API | O cursor do `search-v2` só anda para frente: não existe "cursor anterior" para pedir. Uma paginação real exigiria guardar cada página para poder voltar; acumular resolve o mesmo problema sem esse estado |
 | A faixa da nota (`min`/`max`) saiu do schema Zod e foi para `validarNotas` | A saída estruturada da Claude não suporta essas restrições — ver "Armadilhas conhecidas" |
 | A lista espera o ranking: vaga e nota aparecem juntas | Era o contrário — a tabela vinha em ~2s e as notas caíam em cima dela depois. Lia como defeito: lista pronta, coluna Rank IA vazia, nada dizendo que ainda vinha coisa. O custo aceito é a espera subir para ~25s, e é por isso que a fase é **nomeada** ("Consultando a API de vagas..." → "Avaliando N vagas com a IA...") — espera longa e muda seria o mesmo problema por outro caminho. Quem decide é `faseDaBusca` em `src/fase.js` |
@@ -959,6 +1042,53 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
   publica a chave em `dist/assets/*.js`.
 - **Nem todo erro consome cota.** Chave ausente e 401 não; 429 e 200-sem-
   resultado sim. Quem sabe a diferença é o `tocouApi` do `ErroJSearch`.
+- **Contagem derivada de lista com teto encolhe sozinha.** O painel Controle
+  mostrava 3/200 com 50 gastas porque `usadas()` contava dentro de `usos`, que
+  guarda as últimas 50 entradas e mistura busca de rede com busca de cache. Cada
+  repetição barata empurrava uma requisição paga para fora do corte. Se um
+  número precisa ser verdadeiro, **não o derive de uma lista que descarta**.
+- **Um teste de regressão que você nunca viu falhar não é um teste.** Aconteceu
+  duas vezes em 03/09. Na primeira o teste afirmava `typeof criarApp ===
+  'function'` para provar "importar não abre porta" — passaria intacto com o
+  defeito de volta. Na segunda, o conserto provava por `bind` e **também**
+  passava com o defeito presente. A regra que ficou: reintroduza o defeito, veja
+  o teste falhar, só então desfaça.
+- **Prova de porta por `bind` não vale no Windows.** `listen(PORTA)` sem host
+  liga no wildcard `::`; um `bind` específico em `127.0.0.1` por cima disso é
+  **permitido** no Windows (sem `SO_EXCLUSIVEADDRUSE`), então não dá
+  `EADDRINUSE`. No Linux daria — o teste funcionaria num ambiente e mentiria no
+  outro. Prove por **conexão**: conectar tem que dar `ECONNREFUSED`.
+- **Closure sobre os statements não segura o banco.** `criarAcervo` devolvia
+  funções que fechavam sobre os *prepared statements*, mas nada referenciava o
+  `DatabaseSync`. O GC o coletava, o `node:sqlite` finalizava os statements, e
+  toda rota passava a dar 500 até reiniciar. O `fechar()` existe para segurar
+  essa referência — **apagá-lo por parecer sem uso derruba a produção**.
+- **Dois caminhos de escrita, e só um com as regras.** O `mesclar` protegia o
+  POST; o `PATCH` gravava direto. Resultado: abrir uma vaga marcava `seen` e
+  mandava `rank: null` junto, apagando a nota que outra pessoa pagou. Toda
+  escrita nova no mesmo dado precisa passar pelas mesmas regras, ou a regra não
+  é regra.
+- **Chave de ordenação vinda do cliente é chave de ataque.** O `entrouEm`
+  decide quem o teto descarta. Aceito como veio, uma data no ano 9999 fica em
+  primeiro para sempre. Valide toda entrada que o banco *usa*, não só a que ele
+  mostra.
+- **Verificar num modo não verifica no outro.** O `npm run dev` não alcançava
+  `/api/acervo` e ninguém notou, porque toda verificação — minha e dos
+  subagentes — rodou `node server.js` contra o `dist/`. Se o README promete que
+  dev e produção se comportam igual, teste nos dois.
+- **Simular a queda do jeito errado esconde o defeito.** Testei o estado de
+  falha servindo o `dist/` por um servidor estático: a falha chegou como 404
+  limpo, em português. Com o servidor de fato morto, a mensagem era `Failed to
+  fetch` — texto que o browser fixa em inglês. O `ErroAcervo` separa `message`
+  (tela) de `causa` (console) por causa disso.
+- **200 com corpo que não é JSON não é sucesso.** O catch-all da SPA responde
+  `index.html` para qualquer rota desconhecida. Sem conferir o corpo, uma rota
+  renomeada viraria "o acervo está vazio" com conselho de fazer busca — a falha
+  silenciosa que o módulo existe para impedir.
+- **Worktree dentro do repositório dobra a suíte.** Ao mesclar, o `npm test` deu
+  796 testes em 44 arquivos — o vitest varria também as cópias dentro de
+  `.claude/worktrees/`. Passavam nos dois casos, e um número inflado desses faz
+  confiar numa cobertura que não existe.
 - O protótipo já teve **58 vagas fictícias atribuídas a empresas reais** da
   Serra Gaúcha. Foram removidas, mas se voltar a inventar dados, lembre que o
   site é público.
@@ -969,7 +1099,7 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 
 ```bash
 npm run dev        # a busca e a Avaliação IA só funcionam aqui — porta 5173, caminho /vagasatalhointeligenteparati/
-npm test           # vitest — 301 testes, 16 arquivos
+npm test           # vitest — 398 testes, 22 arquivos
 npm run lint       # oxlint (não pega no-undef hoje; veja a pendência 6)
 npm run build      # gera dist/
 npm run cidades    # regenera src/data/cidades.js a partir do IBGE
