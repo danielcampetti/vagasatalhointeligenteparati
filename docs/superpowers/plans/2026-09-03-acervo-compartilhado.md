@@ -1008,36 +1008,37 @@ o Step 3 acabou de dar ao parâmetro, essa chamada passaria a **abrir o banco
 real** — criando um `acervo.db` no repositório como efeito colateral de rodar
 a suíte.
 
-Troque as duas chamadas do arquivo por uma com acervo em memória:
+**Não reescreva o arquivo.** Ele foi endurecido depois que este plano foi
+escrito: o primeiro teste hoje prova, por conexão TCP, que importar o módulo
+não abre porta — e essa prova custou duas rodadas de conserto para funcionar
+no Windows (a versão anterior, por `bind`, passava com o defeito presente,
+porque o Windows permite bind específico por cima de um wildcard).
+Substituí-lo por qualquer coisa mais simples é uma regressão, não uma limpeza.
+
+A mudança é de **uma linha**, no segundo teste. Onde está:
 
 ```js
-import { describe, expect, test } from 'vitest'
-import { criarApp } from '../../server.js'
-import { abrirBanco, criarAcervo } from './banco'
-
-/**
- * O `server.js` chamava `app.listen` no topo do módulo. Importá-lo abriria uma
- * porta como efeito colateral do import — e uma porta já ocupada derrubaria a
- * suíte inteira por um motivo sem relação nenhuma com o que se testa.
- *
- * Este teste existe para travar a propriedade: importar não escuta.
- */
-describe('criarApp', () => {
-  test('importar o servidor não abre porta', () => {
-    expect(typeof criarApp).toBe('function')
-  })
-
-  // Com acervo em memória de propósito: o padrão do parâmetro abre o banco do
-  // ambiente, e um teste não pode criar arquivo no repositório.
-  test('devolve um app do express, montado', () => {
-    const app = criarApp({ acervo: criarAcervo(abrirBanco(':memory:')) })
-    expect(typeof app.listen).toBe('function')
-  })
-})
+    const app = criarApp()
 ```
 
-Confirme que nenhum arquivo nasceu: `git status --short` não pode listar
-`acervo.db` depois de rodar a suíte.
+passe um acervo em memória:
+
+```js
+    const app = criarApp({ acervo: criarAcervo(abrirBanco(':memory:')) })
+```
+
+E acrescente o import correspondente ao topo do arquivo:
+
+```js
+import { abrirBanco, criarAcervo } from './banco'
+```
+
+Mantenha todo o resto como está: o docblock `@vitest-environment node`, o
+`portaLivre`, o `sondarPorta`, os dois imports dinâmicos e o primeiro teste
+inteiro, com seus comentários.
+
+Depois, confirme que nenhum arquivo nasceu: o `status --short` do controle de
+versão não pode listar `acervo.db` depois de a suíte rodar.
 
 - [ ] **Step 6: Ignorar o banco local no git**
 
