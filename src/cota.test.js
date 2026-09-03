@@ -1,11 +1,17 @@
 import { beforeEach, describe, expect, test } from 'vitest'
 import {
   PAGINA_LEGADA,
+  TETO_HISTORICO,
+  ajustarContagem,
   consultarCache,
+  lerCota,
   limparCache,
   paginasDoCache,
   proximaPagina,
   registrarUso,
+  servidasDoCache,
+  usadas,
+  zerarContagem,
 } from './cota'
 import { JANELA_PADRAO } from './janela'
 
@@ -274,5 +280,146 @@ describe('cache paginado', () => {
   test('entrada ausente ou torta não quebra', () => {
     expect(paginasDoCache(null)).toEqual([])
     expect(proximaPagina(null, 0)).toBe(null)
+  })
+})
+
+/**
+ * O defeito que este bloco tranca foi visto em produção: o painel Controle
+ * mostrava **3 / 200** quando a conta na OpenWeb Ninja já tinha gasto 50.
+ *
+ * A contagem saía de `usos`, que é o histórico da tela — e o histórico é
+ * cortado nas últimas entradas. Como busca servida do cache entra na mesma
+ * lista que busca de rede, cada repetição empurrava uma requisição paga para
+ * fora do corte. O número não só errava: **encolhia sozinho**, e encolhia
+ * justamente quando o app fazia a coisa certa (servir do cache).
+ *
+ * A correção separa as duas coisas que estavam na mesma lista: `usos`
+ * continua sendo a tela, com teto; `totais` é a contagem, e não tem teto.
+ */
+describe('a contagem não sai do histórico cortado', () => {
+  const encher = (origem, quantas, prefixo = 't') => {
+    for (let i = 0; i < quantas; i++) {
+      registrarUso(`${prefixo}${i}`, 'Caxias do Sul, RS', origem, {
+        vagas: origem === 'rede' ? VAGAS : null,
+      })
+    }
+  }
+
+  // O caso exato de produção: 50 pagas, depois repetições que couberam no
+  // cache. Antes desta correção o painel dizia 3.
+  test('50 de rede seguidas de repetições do cache continuam contando 50', () => {
+    encher('rede', 50)
+    encher('cache', 47, 'r')
+
+    expect(usadas(lerCota())).toBe(50)
+  })
+
+  test('o histórico para no teto, a contagem passa dele', () => {
+    encher('rede', 60)
+
+    const cota = lerCota()
+    expect(cota.usos).toHaveLength(TETO_HISTORICO)
+    expect(usadas(cota)).toBe(60)
+  })
+
+  test('o mesmo vale para as buscas servidas do cache', () => {
+    encher('rede', 1)
+    encher('cache', 70, 'r')
+
+    expect(servidasDoCache(lerCota())).toBe(70)
+  })
+
+  // Consulta vazia não é requisição, e continua não sendo contada.
+  test('consulta sem cargo e sem cidade não entra na contagem', () => {
+    registrarUso('  ', '  ', 'rede', { vagas: VAGAS })
+    expect(usadas(lerCota())).toBe(0)
+  })
+
+  test('zerar a contagem zera os totais, não só o histórico', () => {
+    encher('rede', 60)
+    zerarContagem()
+
+    const cota = lerCota()
+    expect(usadas(cota)).toBe(0)
+    expect(servidasDoCache(cota)).toBe(0)
+    expect(cota.usos).toEqual([])
+  })
+
+  // Quem já tinha cota gravada antes dos totais existirem não pode voltar a
+  // zero no primeiro deploy. O histórico subconta — é o defeito inteiro —,
+  // mas continuar de onde ele parou é melhor que jogar fora o que ele sabe.
+  test('cota gravada antes dos totais deriva a contagem do histórico', () => {
+    localStorage.setItem(
+      'vagas:cota',
+      JSON.stringify({
+        desde: '2026-08-26T12:00:00.000Z',
+        cache: {},
+        usos: [
+          { chave: 'a|b|month', origem: 'rede', quando: 'z' },
+          { chave: 'a|b|month', origem: 'rede', quando: 'z' },
+          { chave: 'a|b|month', origem: 'cache', quando: 'z' },
+        ],
+      }),
+    )
+
+    const cota = lerCota()
+    expect(usadas(cota)).toBe(2)
+    expect(servidasDoCache(cota)).toBe(1)
+  })
+
+  test('totais adulterados caem no histórico em vez de derrubar a tela', () => {
+    localStorage.setItem(
+      'vagas:cota',
+      JSON.stringify({
+        desde: null,
+        cache: {},
+        usos: [{ chave: 'a|b|month', origem: 'rede', quando: 'z' }],
+        totais: { rede: -7, cache: 'muitas' },
+      }),
+    )
+
+    const cota = lerCota()
+    expect(usadas(cota)).toBe(1)
+    expect(servidasDoCache(cota)).toBe(0)
+  })
+})
+
+/**
+ * `ajustarContagem` existe porque o número verdadeiro não mora aqui.
+ *
+ * A cota é da **conta** na OpenWeb Ninja; este contador é do **navegador**.
+ * Abrir o app publicado num celular, ou trocar de máquina, começa a contar do
+ * zero enquanto o provedor continua debitando das mesmas 200 — e não há como
+ * o app descobrir sozinho o que foi gasto de outro lugar. O painel do
+ * provedor sabe; este botão é como esse número entra.
+ */
+describe('ajustar a contagem para o número do provedor', () => {
+  test('põe a contagem no valor informado', () => {
+    registrarUso('x', 'y', 'rede', { vagas: VAGAS })
+    ajustarContagem(50)
+
+    expect(usadas(lerCota())).toBe(50)
+  })
+
+  test('ajustar não descarta o cache — as repetições seguem de graça', () => {
+    registrarUso('x', 'y', 'rede', { vagas: VAGAS, cursor: 'C1' })
+    ajustarContagem(50)
+
+    expect(consultarCache('x', 'y').cursor).toBe('C1')
+  })
+
+  test('a contagem ajustada continua subindo com as buscas seguintes', () => {
+    ajustarContagem(50)
+    registrarUso('x', 'y', 'rede', { vagas: VAGAS })
+
+    expect(usadas(lerCota())).toBe(51)
+  })
+
+  test('valor negativo ou sem sentido não vira contagem', () => {
+    ajustarContagem(7)
+    ajustarContagem(-3)
+    ajustarContagem('cinquenta')
+
+    expect(usadas(lerCota())).toBe(7)
   })
 })

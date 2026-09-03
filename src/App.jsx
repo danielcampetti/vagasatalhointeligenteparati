@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { BANCO_DE_VAGAS, INSTRUCAO_PADRAO, MODALIDADES } from './data/vagas'
 import {
   LIMITE_MENSAL,
+  ajustarContagem,
   chaveDaConsulta,
   consultarCache,
   paginasDoCache,
@@ -2657,15 +2658,42 @@ function PaginaVaga({ vaga, onVoltar, cv, instrucao, onCusto, ranqueando }) {
 /**
  * Aba Controle: quanto da cota mensal da JSearch já foi gasto.
  *
- * O protótipo ainda não chama a API, então o que se vê aqui é o consumo que
- * *haveria*. O mecanismo já é o definitivo — quando a chamada real entrar, o
- * número passa a ser o de verdade sem mexer nesta tela.
+ * O número é real desde que a busca passou a sair para a rede — e é por isso
+ * que ele precisa estar certo. Já esteve errado: contado a partir do histórico
+ * da tela, que tem teto, o painel mostrava 3 requisições com 50 gastas na
+ * conta. A contagem hoje vem de `totais`, no `cota.js`, que não é cortado.
+ *
+ * O que ele ainda não consegue saber sozinho é o que foi gasto de outro
+ * navegador — a cota é da conta, o `localStorage` é da origem. Daí o
+ * "Ajustar": o painel do provedor é a fonte, e este botão é a entrada dela.
  */
-function PainelControle({ cota, onZerar, onLimparCache, custo, onZerarCusto }) {
+function PainelControle({
+  cota,
+  onZerar,
+  onAjustar,
+  onLimparCache,
+  custo,
+  onZerarCusto,
+}) {
   const gastas = usadas(cota)
   const doCache = servidasDoCache(cota)
   const restantes = Math.max(0, LIMITE_MENSAL - gastas)
   const fracao = gastas / LIMITE_MENSAL
+
+  /**
+   * O campo de ajuste, aberto ou fechado.
+   *
+   * `null` é fechado; string (inclusive vazia) é aberto. O valor fica como
+   * texto e não como número porque um campo numérico esvaziado devolve `''`,
+   * e guardá-lo como `Number` transformaria a caixa vazia em zero na frente de
+   * quem só apagou para digitar de novo.
+   */
+  const [ajuste, setAjuste] = useState(null)
+
+  const confirmarAjuste = () => {
+    onAjustar(Number(ajuste))
+    setAjuste(null)
+  }
 
   // Verde até a metade, âmbar a partir de 75%, vermelho perto do teto.
   const cor = fracao >= 0.9 ? '#F87171' : fracao >= 0.75 ? '#D9A441' : '#4ADE80'
@@ -2728,13 +2756,70 @@ function PainelControle({ cota, onZerar, onLimparCache, custo, onZerarCusto }) {
               / {LIMITE_MENSAL} requisições
             </span>
           </div>
-          <button
-            onClick={onZerar}
-            className="bg-[#0E1729] text-[#C8D1E0] hover:bg-[#152039]"
-            style={botao}
-          >
-            Zerar contagem
-          </button>
+          {/* Dois botões que fazem coisas diferentes com o mesmo número:
+              "Zerar" é o começo de um ciclo novo (o plano renovou), "Ajustar"
+              é acertar o ciclo corrente com o que o provedor mostra. Confundir
+              um com o outro custa a contagem inteira, e por isso o texto de
+              baixo explica qual é qual em vez de deixar o rótulo sozinho. */}
+          {ajuste === null ? (
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button
+                onClick={() => setAjuste(String(gastas))}
+                className="bg-[#0E1729] text-[#C8D1E0] hover:bg-[#152039]"
+                style={botao}
+              >
+                Ajustar
+              </button>
+              <button
+                onClick={onZerar}
+                className="bg-[#0E1729] text-[#C8D1E0] hover:bg-[#152039]"
+                style={botao}
+              >
+                Zerar contagem
+              </button>
+            </div>
+          ) : (
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <input
+                type="number"
+                min="0"
+                max={LIMITE_MENSAL}
+                value={ajuste}
+                autoFocus
+                onChange={(e) => setAjuste(e.target.value)}
+                // Enter confirma e Esc desiste: o campo aparece no lugar dos
+                // botões, e quem digitou o número não deveria precisar procurar
+                // o mouse para gravá-lo.
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') confirmarAjuste()
+                  if (e.key === 'Escape') setAjuste(null)
+                }}
+                aria-label="Requisições já gastas segundo o provedor"
+                className="bg-[#0B1220] text-[#E8ECF4]"
+                style={{
+                  width: 88,
+                  padding: '8px 10px',
+                  borderRadius: 9,
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  fontSize: 13,
+                }}
+              />
+              <button
+                onClick={confirmarAjuste}
+                className="bg-[#1B3A5F] text-[#DCE7F7] hover:bg-[#234C7C]"
+                style={botao}
+              >
+                Salvar
+              </button>
+              <button
+                onClick={() => setAjuste(null)}
+                className="bg-[#0E1729] text-[#C8D1E0] hover:bg-[#152039]"
+                style={botao}
+              >
+                Cancelar
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Um traço por requisição do mês: dá para ver quanto sobra sem ler
@@ -2767,8 +2852,13 @@ function PainelControle({ cota, onZerar, onLimparCache, custo, onZerarCusto }) {
           {restantes === 1 ? 'requisição restante' : 'requisições restantes'} no
           ciclo
           {cota.desde ? `, iniciado em ${fmtDataHora(cota.desde, false)}` : ''}.
-          {' '}O plano gratuito renova pela data da assinatura, não pelo dia 1º —
-          zere a contagem à mão quando ele virar.
+          {' '}O plano gratuito renova pela data da assinatura, não pelo dia 1º
+          — zere a contagem quando ele virar.
+          {' '}Esta contagem é <strong style={{ color: '#C8D1E0', fontWeight: 600 }}>deste
+          navegador</strong>, mas as 200 são da conta: buscas feitas em outra
+          máquina, em outro navegador ou pelo <code>npm run dev</code> gastam da
+          mesma cota sem aparecer aqui. Quando o painel da OpenWeb Ninja mostrar
+          outro número, é ele que está certo — use "Ajustar" para trazê-lo.
         </div>
       </div>
 
@@ -4227,6 +4317,7 @@ export default function App() {
           <PainelControle
             cota={cota}
             onZerar={() => setCota(zerarContagem())}
+            onAjustar={(gastas) => setCota(ajustarContagem(gastas))}
             onLimparCache={() => setCota(limparCache())}
             custo={custo}
             onZerarCusto={() => setCusto(zerarCusto())}

@@ -12,6 +12,23 @@
  * Toda leitura e escrita é defensiva: em aba anônima, com storage bloqueado ou
  * com o valor corrompido por uma versão anterior, o acesso lança. A tela não
  * pode quebrar por causa do contador — no pior caso ele volta a zero.
+ *
+ * ## Duas listas que já foram uma só
+ *
+ * `usos` é o histórico da tela e tem teto; `totais` é a contagem e não tem.
+ * A separação é a correção de um defeito visto em produção: com a contagem
+ * saindo do histórico cortado, o painel mostrava **3 / 200** com 50
+ * requisições já gastas na conta. Cada repetição servida do cache entrava na
+ * mesma lista e empurrava uma requisição paga para fora do corte — o número
+ * encolhia sozinho, e encolhia quando o app acertava.
+ *
+ * ## E o total ainda é do navegador, não da conta
+ *
+ * Nem com a contagem certa este número é a cota: as 200 são da conta na
+ * OpenWeb Ninja, e o `localStorage` é de um navegador e de uma origem. Buscar
+ * pelo app publicado e pelo `npm run dev` debita as mesmas 200 e alimenta dois
+ * contadores diferentes, nenhum dos dois sabendo do outro. Quem sabe o número
+ * verdadeiro é o painel do provedor — e `ajustarContagem` é por onde ele entra.
  */
 
 import { JANELA_PADRAO, apiDaJanela } from './janela'
@@ -21,23 +38,59 @@ export const LIMITE_MENSAL = 200
 
 const CHAVE = 'vagas:cota'
 
-const VAZIO = { desde: null, usos: [], cache: {} }
+/**
+ * Quantas buscas o histórico da tela guarda.
+ *
+ * É teto de **exibição**, não de contagem: a lista existe para mostrar as
+ * últimas, e guardar mil linhas para renderizar as cinquenta primeiras só
+ * gastaria storage. Foi este teto que corrompeu a cota enquanto ela era
+ * derivada daqui — mexer nele hoje muda o tamanho da lista e mais nada.
+ */
+export const TETO_HISTORICO = 50
+
+const SEM_TOTAIS = { rede: 0, cache: 0 }
+
+const VAZIO = { desde: null, usos: [], cache: {}, totais: SEM_TOTAIS }
+
+/** Contagem só é contagem se for inteira e não-negativa; o resto é lixo. */
+function contagemValida(n) {
+  return Number.isInteger(n) && n >= 0 ? n : null
+}
+
+/**
+ * Os totais gravados — ou, para cota escrita antes deles existirem, o que o
+ * histórico ainda sabe.
+ *
+ * O histórico subconta, que é o defeito inteiro. Mas quem já tinha cota
+ * gravada não pode voltar a zero no primeiro deploy: continuar de onde ele
+ * parou erra menos que descartá-lo, e o botão de ajustar conserta o resto.
+ */
+function totaisLidos(dados, usos) {
+  const gravados = dados?.totais
+  const daLista = (origem) => usos.filter((u) => u?.origem === origem).length
+  return {
+    rede: contagemValida(gravados?.rede) ?? daLista('rede'),
+    cache: contagemValida(gravados?.cache) ?? daLista('cache'),
+  }
+}
 
 /** Só o que a tela precisa saber para desenhar o painel. */
 export function lerCota() {
   try {
     const cru = localStorage.getItem(CHAVE)
-    if (!cru) return { ...VAZIO, usos: [], cache: {} }
+    if (!cru) return { ...VAZIO, usos: [], cache: {}, totais: { ...SEM_TOTAIS } }
     const dados = JSON.parse(cru)
     // Um formato antigo ou adulterado não pode derrubar a página.
+    const usos = Array.isArray(dados.usos) ? dados.usos : []
     return {
       desde: typeof dados.desde === 'string' ? dados.desde : null,
-      usos: Array.isArray(dados.usos) ? dados.usos : [],
+      usos,
       cache:
         dados.cache && typeof dados.cache === 'object' ? dados.cache : {},
+      totais: totaisLidos(dados, usos),
     }
   } catch {
-    return { ...VAZIO, usos: [], cache: {} }
+    return { ...VAZIO, usos: [], cache: {}, totais: { ...SEM_TOTAIS } }
   }
 }
 
@@ -250,7 +303,17 @@ export function registrarUso(
         origem,
       },
       ...cota.usos,
-    ].slice(0, 50), // o histórico da tela mostra as últimas; não é um log
+      // O corte é da lista, e só dela. A contagem sai de `totais` justamente
+      // para não morrer aqui: enquanto ela vinha daqui, cada repetição
+      // servida do cache empurrava uma requisição paga para fora do teto e
+      // o painel passava a mostrar menos do que a conta já tinha gasto.
+    ].slice(0, TETO_HISTORICO),
+    // Incremento, não recontagem: é o que faz o número sobreviver ao corte
+    // acima e à troca de página.
+    totais: {
+      rede: cota.totais.rede + (origem === 'rede' ? 1 : 0),
+      cache: cota.totais.cache + (origem === 'cache' ? 1 : 0),
+    },
     cache,
   })
 }
@@ -259,7 +322,40 @@ export function registrarUso(
  *  assinatura, não pelo dia 1º, e adivinhar isso daria um número errado. */
 export function zerarContagem(agora = new Date()) {
   const cota = lerCota()
-  return gravar({ ...cota, desde: agora.toISOString(), usos: [] })
+  return gravar({
+    ...cota,
+    desde: agora.toISOString(),
+    usos: [],
+    // Os totais também. Enquanto a contagem era derivada do histórico, esvaziar
+    // um zerava o outro de graça; agora são duas coisas, e esquecer esta linha
+    // deixaria o painel dizendo que o ciclo novo já nasceu gasto.
+    totais: { ...SEM_TOTAIS },
+  })
+}
+
+/**
+ * Põe a contagem no número que o provedor mostra.
+ *
+ * Existe porque o total verdadeiro não mora neste navegador. As 200 são da
+ * conta na OpenWeb Ninja; o contador é do `localStorage` de uma origem. Abrir
+ * o app publicado no celular, trocar de máquina, ou alternar entre o Railway e
+ * o `npm run dev` cria contadores que se ignoram enquanto o provedor debita
+ * das mesmas 200 — e não há de onde o app deduzir o que foi gasto fora dele.
+ *
+ * O histórico não é tocado: as linhas que estão lá aconteceram mesmo, e
+ * apagá-las para casar com um número maior seria trocar um dado verdadeiro por
+ * uma aparência de coerência. Pela mesma razão o cache fica: as consultas
+ * guardadas continuam valendo, e são elas que evitam gastar de novo.
+ *
+ * Valor que não é contagem é ignorado em silêncio — o campo da tela é um
+ * `number`, e um `NaN` vindo dele não pode virar o teto do painel.
+ */
+export function ajustarContagem(gastas) {
+  const alvo = contagemValida(Math.round(Number(gastas)))
+  if (alvo === null) return lerCota()
+
+  const cota = lerCota()
+  return gravar({ ...cota, totais: { ...cota.totais, rede: alvo } })
 }
 
 /** Esvazia o cache: as próximas buscas voltam a consumir cota. */
@@ -267,10 +363,25 @@ export function limparCache() {
   return gravar({ ...lerCota(), cache: {} })
 }
 
+/**
+ * Quantas requisições este navegador registrou no ciclo.
+ *
+ * Sai de `totais`, não de `usos`. A queda para o histórico é para o caso de
+ * receber uma cota montada à mão — em teste, ou por um chamador que ainda não
+ * conhece o campo novo —, e não é o caminho normal: ele subconta.
+ */
 export function usadas(cota) {
-  return cota.usos.filter((u) => u.origem === 'rede').length
+  return contarPor(cota, 'rede')
 }
 
+/** As repetições que o cache respondeu, pelo mesmo mecanismo. */
 export function servidasDoCache(cota) {
-  return cota.usos.filter((u) => u.origem === 'cache').length
+  return contarPor(cota, 'cache')
+}
+
+function contarPor(cota, origem) {
+  const total = contagemValida(cota?.totais?.[origem])
+  if (total !== null) return total
+  const usos = Array.isArray(cota?.usos) ? cota.usos : []
+  return usos.filter((u) => u?.origem === origem).length
 }
