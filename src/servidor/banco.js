@@ -28,8 +28,10 @@
  * um `ExperimentalWarning` no log; é esperado, não é falha.
  */
 
+import path from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
-import { agora, mesclar, temId } from '../vaga.js'
+import { fileURLToPath } from 'node:url'
+import { MARCAS, agora, mesclar, sanearMarcas, temId } from '../vaga.js'
 
 /**
  * O teto do acervo compartilhado.
@@ -50,8 +52,84 @@ export const TETO = 2000
  * qualquer visitante o poder de reescrever `cargo`, `link` ou `descricao` de
  * uma vaga que outra pessoa pagou para trazer. As três marcas são o que a
  * tela de fato altera.
+ *
+ * É a lista do `vaga.js`, não uma cópia: filtrar por nome e coagir por tipo
+ * (`sanearMarcas`) precisam falar das mesmas três chaves, senão uma marca nova
+ * entraria numa lista e não na outra.
  */
-export const CAMPOS_PATCH = ['fav', 'seen', 'rank']
+export const CAMPOS_PATCH = MARCAS
+
+/**
+ * O teto da descrição guardada, em caracteres.
+ *
+ * Medido em 03/09/2026 sobre 88 vagas reais: 2,7 KB por vaga, dos quais 66% é a
+ * descrição — ou seja, ~1,8 KB de descrição típica. 20 mil caracteres deixam
+ * folga de uma ordem de grandeza para o anúncio mais prolixo e ainda assim
+ * impedem que um POST despeje megabytes num campo só.
+ *
+ * O que motiva o corte é o volume: o que entra ali sobrevive a restart e a
+ * deploy, e não há `DELETE` para desfazer.
+ */
+export const LIMITE_DESCRICAO = 20000
+
+/**
+ * Onde o acervo mora, para quem precisa abri-lo.
+ *
+ * Mora aqui, e não no `server.js`, porque agora há dois processos que abrem o
+ * mesmo banco: o servidor de produção e o plugin que serve `/api/acervo` sob o
+ * `npm run dev`. Dois cálculos de caminho seriam duas chances de divergirem — e
+ * divergir aqui é exatamente o defeito que este trabalho veio corrigir.
+ *
+ * No Railway é um volume: o disco comum de lá é efêmero, e sem volume o banco
+ * morre a cada deploy. Local o padrão é um arquivo ao lado do código, porque o
+ * README promete que o `npm run dev` e o Railway se comportam igual e exigir
+ * volume para rodar na máquina de quem desenvolve quebraria essa promessa.
+ */
+export function caminhoDoBanco() {
+  const daVez = process.env.BANCO_CAMINHO?.trim()
+  if (daVez) return daVez
+  return path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'acervo.db')
+}
+
+/**
+ * A data de entrada, quando dá para confiar nela.
+ *
+ * `entrouEm` é o critério de descarte do teto, e vinha do cliente sem
+ * conferência: uma vaga com `9999-12-31` ordenava em primeiro para sempre e
+ * nunca era aparada. 2000 delas num POST despejavam o acervo real inteiro, pela
+ * única rota de escrita que existe.
+ *
+ * Passa o que é data válida e não está no futuro — a migração do
+ * `localStorage` manda datas do passado, e é ela a razão de o campo ser aceito.
+ * O resto cai na hora do servidor. Normaliza para ISO de propósito: a ordenação
+ * é `ORDER BY entrouEm DESC` sobre TEXT, e formato misturado ordenaria errado.
+ */
+function entrouEmAceito(bruto, padrao) {
+  if (typeof bruto !== 'string') return padrao
+  const instante = Date.parse(bruto)
+  if (!Number.isFinite(instante)) return padrao
+  if (instante > Date.parse(padrao)) return padrao
+  return new Date(instante).toISOString()
+}
+
+/** A descrição cortada no teto. `null` e `undefined` viram string vazia. */
+function descricaoPodada(bruta) {
+  if (bruta === undefined || bruta === null) return ''
+  return String(bruta).slice(0, LIMITE_DESCRICAO)
+}
+
+/**
+ * A vaga que chegou, com o que é de fora já domado.
+ *
+ * `CAMPOS_PATCH` e o filtro do POST cuidam de **quais** campos entram; isto
+ * cuida de **o que** eles podem valer e pesar. Sem login as duas rotas de
+ * escrita são portas abertas, e o que passa por elas fica no volume.
+ */
+function domada(nova) {
+  const limpa = { ...nova, ...sanearMarcas(nova) }
+  if ('descricao' in limpa) limpa.descricao = descricaoPodada(limpa.descricao)
+  return limpa
+}
 
 /** Abre (ou cria) o banco e garante o schema. `:memory:` para teste. */
 export function abrirBanco(caminho = ':memory:') {
@@ -118,21 +196,43 @@ export function criarAcervo(db, { teto = TETO } = {}) {
    * `ON CONFLICT DO UPDATE` que reescrevesse as regras em SQL. O `ON CONFLICT`
    * daqui só troca `dados`; `entrouEm` fica de fora do `SET` de propósito,
    * porque ele é o critério de descarte do teto e precisa ser estável.
+   *
+   * ## A leva é uma transação só
+   *
+   * Cada `run` era a sua própria transação implícita, e uma vaga que falhasse
+   * no meio deixava as anteriores gravadas e as seguintes de fora, calado.
+   * Ficar pela metade é pior que não gravar: metade de uma busca é um acervo
+   * que ninguém sabe que está incompleto. E o `dados` em JSON existe
+   * justamente porque o `mapear.js` já mudou de forma e vai mudar de novo — o
+   * risco de uma vaga inesperada vem junto com essa liberdade.
+   *
+   * De quebra, N fsyncs viram um, o que num volume atrás da rede não é detalhe.
    */
   function guardar(novas) {
     const lista = Array.isArray(novas) ? novas : []
     const quando = agora()
 
-    for (const nova of lista) {
-      if (!temId(nova)) continue
-      const velha = bruta(nova.id)
-      const final = velha
-        ? mesclar(velha, nova)
-        : { ...nova, entrouEm: nova.entrouEm ?? quando }
-      gravarUma.run(String(final.id), final.entrouEm, JSON.stringify(final))
+    db.exec('BEGIN')
+    try {
+      for (const bruta_ of lista) {
+        if (!temId(bruta_)) continue
+        const nova = domada(bruta_)
+        const velha = bruta(nova.id)
+        const fundida = velha ? mesclar(velha, nova) : nova
+        // Confere também na mescla, e não só na inserção: uma linha gravada
+        // antes desta trava carrega a data do futuro no JSON, e é a próxima
+        // escrita dela que a conserta.
+        const final = { ...fundida, entrouEm: entrouEmAceito(fundida.entrouEm, quando) }
+        gravarUma.run(String(final.id), final.entrouEm, JSON.stringify(final))
+      }
+
+      aparar.run(teto)
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
     }
 
-    aparar.run(teto)
     return listar()
   }
 
@@ -142,38 +242,55 @@ export function criarAcervo(db, { teto = TETO } = {}) {
    * Não inventa vaga: o acervo guarda o que a busca trouxe, não o que se pediu
    * para atualizar. E `id`/`entrouEm` são reafirmados depois do espalhamento
    * para um patch não conseguir movê-los nem por engano.
+   *
+   * ## Por que passa pelo `mesclar`
+   *
+   * Este é o **segundo** caminho de escrita, e por um tempo ele atribuía os
+   * campos como vieram — as quatro regras do `mesclar` valiam só no POST. O
+   * estrago não era hipotético, era o caso normal: A roda a Avaliação IA e a
+   * vaga ganha `rank: 87` no servidor; a aba de B carregou antes disso; B abre
+   * a vaga para ler, o que liga `seen`, e o PATCH leva junto a cópia velha de B
+   * — `rank: null`, `fav: false`. Um clique apagava a nota que A pagou.
+   *
+   * A afirmação central do desenho é que essas quatro regras moram num lugar
+   * só. Passar por `mesclar` com as marcas no papel de "vaga nova" é o que
+   * torna isso verdade em vez de intenção: `fav` e `seen` só ligam, `rank`
+   * ausente não apaga o antigo, e `descricao` — que o PATCH nunca manda —
+   * sobrevive por construção.
    */
   function atualizar(id, campos = {}) {
     const atual = bruta(id)
     if (!atual) return null
 
-    const aceitos = {}
-    for (const campo of CAMPOS_PATCH) {
-      if (campo in campos) aceitos[campo] = campos[campo]
+    const final = {
+      ...mesclar(atual, sanearMarcas(campos)),
+      id: atual.id,
+      entrouEm: atual.entrouEm,
     }
-
-    const final = { ...atual, ...aceitos, id: atual.id, entrouEm: atual.entrouEm }
     gravarUma.run(String(final.id), final.entrouEm, JSON.stringify(final))
     return final
   }
 
-  /**
-   * Fecha o banco.
-   *
-   * Existe por dois motivos, e o segundo é o que não pode ser removido: além
-   * de ser a saída limpa para um banco em memória de teste, este método é a
-   * única coisa no objeto devolvido que fecha sobre o `db`.
-   *
-   * Sem ele, o objeto só referencia os *prepared statements*, e o
-   * `DatabaseSync` fica sem nenhuma referência viva. O GC então o coleta, o
-   * `node:sqlite` finaliza os statements junto, e toda operação passa a
-   * lançar "statement has been finalized" — em produção, 500 em todas as
-   * rotas até o processo reiniciar. Reproduzido em 03/09/2026 com
-   * `node --expose-gc`.
-   */
+  /** Fecha o banco. A saída limpa de um banco em memória de teste. */
   function fechar() {
     db.close()
   }
 
-  return { listar, buscarPorId, guardar, atualizar, fechar }
+  /**
+   * O `db` sai no objeto, e isso não é vazamento de detalhe — é a trava.
+   *
+   * Sem nenhuma referência viva ao `DatabaseSync`, o V8 é livre para coletá-lo
+   * a qualquer momento; o `node:sqlite` finaliza os *prepared statements*
+   * junto, e toda operação passa a lançar "statement has been finalized". Em
+   * produção isso é 500 em todas as rotas até o processo reiniciar. Reproduzido
+   * em 03/09/2026 com `node --expose-gc`.
+   *
+   * Por um tempo a única coisa que segurava o `db` era o `fechar` fechar sobre
+   * ele — um export sem chamador em produção, com um comentário pedindo para
+   * não ser apagado. Comentário não é trava: é exatamente o tipo de coisa que
+   * uma limpeza futura remove "porque ninguém usa". Nomeado no objeto, sumir
+   * dele exige apagar um campo que o teste cobre. (O `guardar` também o
+   * referencia agora, pelo `BEGIN`/`COMMIT` — duas amarras, não uma.)
+   */
+  return { db, listar, buscarPorId, guardar, atualizar, fechar }
 }

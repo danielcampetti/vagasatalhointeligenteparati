@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { agora, mesclar, temId } from './vaga'
+import { MARCAS, agora, marcasMudadas, mesclar, sanearMarcas, temId } from './vaga'
 
 const vaga = (id, extra = {}) => ({
   id,
@@ -71,5 +71,85 @@ describe('temId', () => {
 describe('agora', () => {
   test('devolve ISO 8601', () => {
     expect(agora()).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/)
+  })
+})
+
+/**
+ * As marcas são o único pedaço da vaga que a tela escreve, e por isso o único
+ * que atravessa a rede vindo de fora. `MARCAS` diz quais são; `sanearMarcas`
+ * diz o que cada uma pode valer.
+ *
+ * A distinção custou um defeito: a rota de PATCH filtrava o **nome** do campo e
+ * nunca o **valor**, então `rank` aceitava uma string de 50 mil caracteres — e
+ * `rank` volta em toda listagem, num banco onde nada é apagado.
+ */
+describe('sanearMarcas', () => {
+  test('as três marcas, e só elas', () => {
+    expect(MARCAS).toEqual(['fav', 'seen', 'rank'])
+  })
+
+  test('deixa passar o que já está certo', () => {
+    expect(sanearMarcas({ fav: true, seen: false, rank: 87 })).toEqual({
+      fav: true,
+      seen: false,
+      rank: 87,
+    })
+  })
+
+  test('rank que não é número finito vira null', () => {
+    expect(sanearMarcas({ rank: 'x'.repeat(50000) }).rank).toBe(null)
+    expect(sanearMarcas({ rank: {} }).rank).toBe(null)
+    expect(sanearMarcas({ rank: Number.NaN }).rank).toBe(null)
+    expect(sanearMarcas({ rank: Number.POSITIVE_INFINITY }).rank).toBe(null)
+  })
+
+  test('fav e seen saem booleanos, venha o que vier', () => {
+    const limpo = sanearMarcas({ fav: { grande: 'x' }, seen: 'talvez' })
+    expect(limpo.fav).toBe(true)
+    expect(limpo.seen).toBe(true)
+  })
+
+  test('campo que não é marca não entra', () => {
+    expect(sanearMarcas({ cargo: 'INVADIDO', link: 'https://mau' })).toEqual({})
+  })
+
+  /**
+   * Marca ausente tem que continuar ausente: é a ausência que o `mesclar` lê
+   * como "não mexe nisso". Trocá-la por `undefined` explícito faria um patch
+   * parcial apagar o resto.
+   */
+  test('marca ausente continua ausente, não vira undefined', () => {
+    expect('rank' in sanearMarcas({ fav: true })).toBe(false)
+  })
+})
+
+/**
+ * Mandar as três marcas sempre é como a nota paga de outra pessoa morria: a
+ * aba que carregou antes da Avaliação IA tem `rank: null` na sua cópia, e um
+ * PATCH com as três leva esse `null` junto com o `seen` que o clique ligou.
+ */
+describe('marcasMudadas', () => {
+  test('só o que mudou vai', () => {
+    const antes = vaga('a', { fav: false, seen: false, rank: 87 })
+    expect(marcasMudadas(antes, { ...antes, seen: true })).toEqual({ seen: true })
+  })
+
+  test('a nota que a aba não conhece não é reenviada como null', () => {
+    // A cópia local tem `rank: null` porque carregou antes da avaliação, e o
+    // clique só liga `seen`. O que sai não pode levar esse null junto.
+    const local = vaga('a', { rank: null })
+    const mudado = marcasMudadas(local, { ...local, seen: true })
+    expect(mudado).toEqual({ seen: true })
+    expect('rank' in mudado).toBe(false)
+  })
+
+  test('nada mudou, nada vai', () => {
+    const antes = vaga('a')
+    expect(marcasMudadas(antes, { ...antes })).toEqual({})
+  })
+
+  test('a nota nova de verdade vai', () => {
+    const antes = vaga('a', { rank: null })
+    expect(marcasMudadas(antes, { ...antes, rank: 92 })).toEqual({ rank: 92 })
   })
 })
