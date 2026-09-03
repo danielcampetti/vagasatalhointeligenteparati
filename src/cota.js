@@ -14,7 +14,8 @@
  * pode quebrar por causa do contador — no pior caso ele volta a zero.
  */
 
-import { JANELA_PADRAO } from './janela'
+import { JANELA_PADRAO, apiDaJanela } from './janela'
+import { MODALIDADE_PADRAO, soRemotas } from './modalidade'
 
 export const LIMITE_MENSAL = 200
 
@@ -57,12 +58,42 @@ function gravar(cota) {
  * sem ela aqui, trocar o dropdown para "Hoje" depois de uma busca em
  * "Qualquer data" seria servido pelo cache da consulta larga — o filtro
  * pareceria quebrado quando era o cache respondendo pela pergunta errada.
+ *
+ * Entra pelo `apiDaJanela`, e não crua: o que a chave precisa distinguir são
+ * **requisições**. "Último mês" e "Últimos 15 dias" mandam as duas
+ * `date_posted=month` — a API não tem janela de 15 dias — e portanto dividem a
+ * mesma entrada. Separá-las gastaria uma das 200 do mês para rebaixar vagas
+ * que já estão na tela.
+ *
+ * Como `api === valor` nas cinco janelas anteriores a essa, as chaves já
+ * gravadas continuam sendo achadas.
+ *
+ * A modalidade entra pela metade, e a metade é da API. Só 'remoto' muda a
+ * requisição (`work_from_home=true`); híbrido e presencial não têm parâmetro
+ * no `/search-v2` e são recorte local — ver `modalidade.js`. Como a chave
+ * existe para distinguir *requisições*, é o booleano que entra, não o valor de
+ * quatro estados.
+ *
+ * O ganho vai direto para a cota: Todas, Híbrido e Presencial dividem a mesma
+ * entrada, então alternar entre elas acha o cache e não gasta requisição.
+ * Separar por modalidade queimaria uma das 200 do mês a cada troca de dropdown
+ * para rebaixar exatamente as vagas que já estavam na tela.
+ *
+ * O sufixo só aparece quando é remoto — assim as chaves gravadas antes desta
+ * mudança continuam sendo achadas, em vez de virarem órfãs no primeiro deploy
+ * levando junto requisições que já foram pagas.
  */
-export function chaveDaConsulta(termo, cidade, janela = JANELA_PADRAO) {
+export function chaveDaConsulta(
+  termo,
+  cidade,
+  janela = JANELA_PADRAO,
+  modalidade = MODALIDADE_PADRAO,
+) {
   const t = termo.trim()
   const c = cidade.trim()
   if (!t && !c) return null
-  return `${t}|${c}|${janela}`
+  const base = `${t}|${c}|${apiDaJanela(janela)}`
+  return soRemotas(modalidade) ? `${base}|remoto` : base
 }
 
 /**
@@ -141,8 +172,13 @@ const TETO_CACHE = 20
  * API** quando há cache — antes o cache só contabilizava, agora ele evita a
  * requisição, que era o ponto.
  */
-export function consultarCache(termo, cidade, janela = JANELA_PADRAO) {
-  const chave = chaveDaConsulta(termo, cidade, janela)
+export function consultarCache(
+  termo,
+  cidade,
+  janela = JANELA_PADRAO,
+  modalidade = MODALIDADE_PADRAO,
+) {
+  const chave = chaveDaConsulta(termo, cidade, janela, modalidade)
   if (!chave) return null
   const entrada = lerCota().cache[chave]
   if (!entrada || !Array.isArray(entrada.vagas)) return null
@@ -167,10 +203,16 @@ export function registrarUso(
   termo,
   cidade,
   origem,
-  { vagas = null, cursor = null, janela = JANELA_PADRAO, paginas = null } = {},
+  {
+    vagas = null,
+    cursor = null,
+    janela = JANELA_PADRAO,
+    modalidade = MODALIDADE_PADRAO,
+    paginas = null,
+  } = {},
   agora = new Date(),
 ) {
-  const chave = chaveDaConsulta(termo, cidade, janela)
+  const chave = chaveDaConsulta(termo, cidade, janela, modalidade)
   if (!chave) return lerCota()
 
   const cota = lerCota()

@@ -49,20 +49,46 @@
 export const JANELA_PADRAO = 'month'
 
 /**
- * `valor` é o que a API recebe em `date_posted`, sem tradução no meio.
- * `dias` é o teto do corte local; `null` significa "não corta".
+ * `valor` identifica a janela na tela e no localStorage. `api` é o que vai em
+ * `date_posted`. `dias` é o teto do corte local; `null` significa "não corta".
+ *
+ * Os dois primeiros foram um campo só até "Últimos 15 dias" existir, e a
+ * separação é o que a tornou possível. O `date_posted` é um enum fechado —
+ * all, today, 3days, week, month — e `15days` não está nele: mandá-lo seria
+ * 400, e um 400 debita uma das 200 do mês igual a uma busca boa.
+ *
+ * Então ela pede `month`, a janela mais estreita que **contém** 15 dias, e
+ * corta em 15 aqui. É exatamente o desenho de dois portões que este módulo já
+ * tinha por outro motivo — a API não cumprir a janela que promete —, agora
+ * servindo também para oferecer uma janela que ela nem tem.
  */
 export const JANELAS = [
-  { valor: 'today', rotulo: 'Hoje', dias: 0 },
-  { valor: '3days', rotulo: 'Últimos 3 dias', dias: 3 },
-  { valor: 'week', rotulo: 'Última semana', dias: 7 },
-  { valor: 'month', rotulo: 'Último mês', dias: 30 },
-  { valor: 'all', rotulo: 'Qualquer data', dias: null },
+  { valor: 'today', rotulo: 'Hoje', api: 'today', dias: 0 },
+  { valor: '3days', rotulo: 'Últimos 3 dias', api: '3days', dias: 3 },
+  { valor: 'week', rotulo: 'Última semana', api: 'week', dias: 7 },
+  { valor: '15dias', rotulo: 'Últimos 15 dias', api: 'month', dias: 15 },
+  { valor: 'month', rotulo: 'Último mês', api: 'month', dias: 30 },
+  { valor: 'all', rotulo: 'Qualquer data', api: 'all', dias: null },
 ]
 
 /** A janela pelo valor, ou `undefined` se o valor não for de nenhuma. */
 export function janelaDe(valor) {
   return JANELAS.find((j) => j.valor === valor)
+}
+
+/**
+ * O `date_posted` que esta janela pede à API.
+ *
+ * É também o que entra na chave de cache, e essa é a parte que economiza cota:
+ * "Último mês" e "Últimos 15 dias" fazem a mesma requisição, então têm de
+ * dividir a mesma entrada. Guardá-las separadas gastaria uma das 200 para
+ * rebaixar vagas que já estão na tela.
+ *
+ * Janela desconhecida cai no padrão em vez de seguir para a API — vale para
+ * uma gravada por versão anterior e para uma adulterada no localStorage.
+ */
+export function apiDaJanela(valor) {
+  return janelaDe(valor)?.api ?? JANELA_PADRAO
 }
 
 /**

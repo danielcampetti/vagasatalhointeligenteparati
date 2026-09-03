@@ -95,6 +95,108 @@ describe('cache por janela de publicação', () => {
   })
 })
 
+/**
+ * A modalidade entra na chave pela metade — de propósito, e a metade é da API.
+ *
+ * Só 'remoto' vira `work_from_home=true` na requisição; 'presencial' é a
+ * ausência do parâmetro, e todo o trabalho dele é corte local (ver
+ * `modalidade.js`). Logo o que separa as entradas é o booleano — que aqui
+ * coincide com a opção, porque são duas.
+ *
+ * O ganho é direto na cota, e vem da forma da chave: "Presencial" não põe
+ * sufixo nenhum, então cai exatamente na chave que a busca sem modalidade
+ * sempre teve. As entradas gravadas antes desta funcionalidade existir
+ * continuam sendo achadas — do contrário o primeiro deploy jogaria fora, em
+ * silêncio, requisições que já foram pagas.
+ */
+/**
+ * "Último mês" e "Últimos 15 dias" fazem a **mesma** requisição — as duas
+ * mandam `date_posted=month`, porque a API não tem uma janela de 15 dias e os
+ * 15 dias saem do corte local.
+ *
+ * A chave existe para distinguir requisições, então é o valor da API que entra
+ * nela. Sem isso, alternar entre as duas gastaria uma das 200 do mês para
+ * rebaixar vagas que já estão na tela.
+ *
+ * E como `api === valor` nas cinco janelas que existiam antes, as chaves já
+ * gravadas continuam sendo achadas — a mesma propriedade que salvou o cache
+ * quando a modalidade entrou.
+ */
+describe('cache por janela: o que entra na chave é o que a API foi perguntada', () => {
+  test('15 dias e último mês dividem a entrada — alternar não gasta cota', () => {
+    registrarUso('x', 'y', 'rede', { vagas: VAGAS, janela: 'month' })
+    expect(consultarCache('x', 'y', '15dias').vagas).toEqual(VAGAS)
+  })
+
+  test('e o contrário também: gravado em 15 dias, achado em mês', () => {
+    registrarUso('x', 'y', 'rede', { vagas: VAGAS, janela: '15dias' })
+    expect(consultarCache('x', 'y', 'month').vagas).toEqual(VAGAS)
+  })
+
+  // A garantia de que a mudança não órfã o cache existente.
+  test('chave gravada antes desta mudança continua sendo achada', () => {
+    registrarUso('x', 'y', 'rede', { vagas: VAGAS, janela: 'week' })
+    expect(consultarCache('x', 'y', 'week').vagas).toEqual(VAGAS)
+  })
+
+  // Semana e mês continuam sendo requisições diferentes, e continuam separadas.
+  test('janelas que a API distingue seguem em entradas distintas', () => {
+    registrarUso('x', 'y', 'rede', { vagas: VAGAS, janela: 'week' })
+    expect(consultarCache('x', 'y', 'today')).toBe(null)
+  })
+})
+
+describe('cache por modalidade', () => {
+  test('remoto guarda sua própria lista: a requisição foi outra', () => {
+    const doGeral = [{ id: 'g1' }]
+    const remotas = [{ id: 'r1' }]
+    registrarUso('x', 'y', 'rede', { vagas: doGeral, modalidade: 'presencial' })
+    registrarUso('x', 'y', 'rede', { vagas: remotas, modalidade: 'remoto' })
+
+    expect(
+      consultarCache('x', 'y', JANELA_PADRAO, 'presencial').vagas,
+    ).toEqual(doGeral)
+    expect(consultarCache('x', 'y', JANELA_PADRAO, 'remoto').vagas).toEqual(remotas)
+  })
+
+  // O caso que geraria o bug: buscar em "Remoto" e receber a lista presencial.
+  test('o cache do presencial não responde por "Remoto"', () => {
+    registrarUso('x', 'y', 'rede', { vagas: VAGAS, modalidade: 'presencial' })
+    expect(consultarCache('x', 'y', JANELA_PADRAO, 'remoto')).toBe(null)
+  })
+
+  test('sem modalidade explícita, guardar e consultar caem na mesma chave', () => {
+    registrarUso('x', 'y', 'rede', { vagas: VAGAS })
+    expect(consultarCache('x', 'y', JANELA_PADRAO, 'presencial').vagas).toEqual(
+      VAGAS,
+    )
+  })
+
+  /**
+   * A retrocompatibilidade que a chave sem sufixo compra, testada pelos dois
+   * lados: uma entrada gravada por uma versão que não conhecia modalidade
+   * (sem o campo) é achada por "Presencial", e o inverso também vale.
+   */
+  test('entrada gravada antes da modalidade existir é achada por "Presencial"', () => {
+    registrarUso('x', 'y', 'rede', { vagas: VAGAS, janela: 'month' })
+    expect(consultarCache('x', 'y', 'month', 'presencial').vagas).toEqual(VAGAS)
+  })
+
+  /**
+   * 'todas' e 'hibrido' foram opções de uma versão anterior e podem estar no
+   * localStorage de alguém. Caem na chave sem sufixo — a mesma de
+   * "Presencial" —, que é onde o resultado delas de fato está.
+   */
+  test('opção morta de uma versão anterior acha a chave sem sufixo', () => {
+    registrarUso('x', 'y', 'rede', { vagas: VAGAS, modalidade: 'presencial' })
+    for (const morto of ['todas', 'hibrido', 'teletrabalho']) {
+      expect(
+        consultarCache('x', 'y', JANELA_PADRAO, morto).vagas,
+      ).toEqual(VAGAS)
+    }
+  })
+})
+
 
 /**
  * O cache guarda páginas, não uma lista solta.

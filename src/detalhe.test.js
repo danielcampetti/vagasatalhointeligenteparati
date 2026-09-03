@@ -30,6 +30,34 @@ describe('acharVaga', () => {
     expect(acharVaga('sumiu', [noBanco], [naIa])).toBe(null)
   })
 
+  /**
+   * A terceira lista, e a que motivou esta rodada: quando a aba Banco de Dados
+   * passou a ler o acervo em vez do `banco`, abrir uma vaga de lá parou de
+   * funcionar. A vaga existe — está na tela, na frente de quem clicou — mas
+   * `acharVaga` só olhava `banco` e `vagasIa`, e o acervo não é nenhum dos
+   * dois. O clique marcava como lida e não abria nada.
+   *
+   * É o mesmo modo de falha que o comentário do `App.jsx` já advertia sobre a
+   * `vagasIa`: uma vaga aberta não pode virar página em branco.
+   */
+  const noAcervo = { id: 'a1', cargo: 'Do acervo', seen: true, fav: true, rank: 60 }
+
+  test('acha no acervo: a aba Banco de Dados não lê o banco', () => {
+    expect(acharVaga('a1', [], [], [noAcervo])).toBe(noAcervo)
+  })
+
+  // A busca corrente traz a versão mais nova da API — salário e dias podem ter
+  // mudado desde que a vaga entrou no acervo.
+  test('no banco e no acervo: o banco vence, é o dado mais recente', () => {
+    expect(acharVaga('a1', [noBanco], [], [noAcervo])).toBe(noBanco)
+  })
+
+  // O acervo carrega `seen` e `fav`, que a cópia da IA nunca teve — mesma
+  // razão pela qual o banco vence a IA.
+  test('no acervo e na IA: o acervo vence, carrega seen e fav', () => {
+    expect(acharVaga('a1', [], [naIa], [noAcervo])).toBe(noAcervo)
+  })
+
   // `vagaAberta` é null sempre que não há página de detalhe no ar, que é a
   // maior parte do tempo — este é o caminho comum, não a exceção.
   test('sem id aberto devolve null, sem varrer lista nenhuma', () => {
@@ -38,5 +66,6 @@ describe('acharVaga', () => {
 
   test('listas ausentes não derrubam a tela', () => {
     expect(acharVaga('a1')).toBe(null)
+    expect(acharVaga('a1', [noBanco])).toBe(noBanco)
   })
 })

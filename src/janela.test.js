@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest'
 import {
   JANELAS,
   JANELA_PADRAO,
+  apiDaJanela,
   cabeNoQueJaTemos,
   filtrarPorJanela,
 } from './janela'
@@ -86,6 +87,64 @@ describe('filtrarPorJanela', () => {
   test('janela desconhecida não filtra nada — some com o resultado seria pior', () => {
     const vagas = [vaga('a', 2), vaga('b', 400)]
     expect(filtrarPorJanela(vagas, 'ontem-a-noite').visiveis).toHaveLength(2)
+  })
+})
+
+/**
+ * "Últimos 15 dias" é a primeira janela que a API não sabe pedir.
+ *
+ * O `date_posted` é um enum fechado — all, today, 3days, week, month — e
+ * `15days` não está nele. Mandá-lo seria 400, e 400 debita uma das 200 do mês
+ * igual a uma busca boa.
+ *
+ * O que torna a opção possível é o módulo já ter dois portões: pede-se à API a
+ * janela mais estreita que **contém** 15 dias, e o corte local faz o resto. É
+ * o mesmo desenho que existe porque a API não cumpre a janela que promete —
+ * aqui ele passa a servir também para oferecer uma janela que ela nem tem.
+ */
+describe('apiDaJanela', () => {
+  test('as janelas que a API conhece mandam o próprio valor', () => {
+    for (const valor of ['today', '3days', 'week', 'month', 'all']) {
+      expect(apiDaJanela(valor)).toBe(valor)
+    }
+  })
+
+  test('15 dias vira month: é a janela mais estreita que contém 15 dias', () => {
+    expect(apiDaJanela('15dias')).toBe('month')
+  })
+
+  // O que a API recebe tem de ser sempre um valor do enum dela, ou a
+  // requisição volta 400 e cobra por isso.
+  test('toda janela manda um valor que o enum do date_posted aceita', () => {
+    const enumDaApi = ['all', 'today', '3days', 'week', 'month']
+    for (const j of JANELAS) {
+      expect(enumDaApi).toContain(apiDaJanela(j.valor))
+    }
+  })
+
+  test('janela desconhecida cai no padrão em vez de ir torta', () => {
+    expect(apiDaJanela('ontem-a-noite')).toBe(JANELA_PADRAO)
+  })
+})
+
+describe('JANELAS: últimos 15 dias', () => {
+  test('a opção existe e tem rótulo', () => {
+    const quinze = JANELAS.find((j) => j.valor === '15dias')
+    expect(quinze.rotulo).toBe('Últimos 15 dias')
+    expect(quinze.dias).toBe(15)
+  })
+
+  test('corta no dia 15 e deixa o 16 de fora', () => {
+    const { visiveis } = filtrarPorJanela([vaga('a', 15), vaga('b', 16)], '15dias')
+    expect(visiveis.map((v) => v.id)).toEqual(['a'])
+  })
+
+  // Entre a semana e o mês, que é o buraco que ela veio preencher.
+  test('fica entre "última semana" e "último mês"', () => {
+    expect(cabeNoQueJaTemos('15dias', 'month')).toBe(true)
+    expect(cabeNoQueJaTemos('week', '15dias')).toBe(true)
+    expect(cabeNoQueJaTemos('15dias', 'week')).toBe(false)
+    expect(cabeNoQueJaTemos('month', '15dias')).toBe(false)
   })
 })
 

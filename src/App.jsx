@@ -35,6 +35,20 @@ import {
   filtrarPorJanela,
   janelaDe,
 } from './janela'
+import {
+  // Apelidado porque `data/vagas.js` já exporta um `MODALIDADES`: lá é o array
+  // de strings do formulário de cadastro manual, aqui são as opções do filtro
+  // de busca, com valor de API e rótulo. Coisas diferentes com o mesmo nome —
+  // e o `local` de cada opção daqui tem que bater com as strings de lá, que é
+  // o que o `modalidade.test.js` trava.
+  MODALIDADES as OPCOES_MODALIDADE,
+  MODALIDADE_PADRAO,
+  filtrarPorModalidade,
+  modalidadeDe,
+  soRemotas,
+} from './modalidade'
+import { atualizarNoAcervo, guardarVagas, lerAcervo, semear } from './acervo'
+import { FILTRO_VAZIO, filtrarAcervo, opcoesDoAcervo } from './filtroAcervo'
 import CampoCidade from './paineis/CampoCidade'
 import { AvisoErro, Carregando } from './paineis/comuns'
 import PainelIA from './paineis/PainelIA'
@@ -786,6 +800,65 @@ function Cabecalho({ aba }) {
 }
 
 /**
+ * Um dos dois filtros de dropdown da barra de busca, com o rótulo em cima.
+ *
+ * O rótulo existe porque o `<select>` só mostra o *valor* escolhido, nunca o
+ * que ele significa: "Último mês" sozinho não diz que é a data de publicação,
+ * e ao lado de um segundo dropdown a ambiguidade piora — "Último mês" e
+ * "Todas" lado a lado não se explicam. Cargo e cidade não precisam disso: o
+ * placeholder deles já é a pergunta.
+ *
+ * Existe como componente e não como JSX repetido porque são dois campos com o
+ * mesmo comportamento e a mesma aparência — duplicar seria a próxima mudança
+ * de estilo saindo pela metade.
+ */
+function FiltroSuspenso({ rotulo, valor, opcoes, onMudar, dica }) {
+  return (
+    <label
+      style={{
+        flex: '0 0 auto',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+      }}
+    >
+      <span
+        style={{
+          fontSize: 10,
+          fontWeight: 600,
+          letterSpacing: 0.4,
+          textTransform: 'uppercase',
+          color: '#7C879B',
+        }}
+      >
+        {rotulo}
+      </span>
+      <select
+        value={valor}
+        onChange={(e) => onMudar(e.target.value)}
+        title={dica}
+        style={{
+          padding: '7px 10px',
+          borderRadius: 8,
+          border: '1px solid rgba(255,255,255,0.08)',
+          background: '#0B1220',
+          color: '#C8D1E0',
+          fontSize: 12.5,
+          cursor: 'pointer',
+          outline: 'none',
+        }}
+      >
+        {opcoes.map((o) => (
+          <option key={o.valor} value={o.valor}>
+            {o.rotulo}
+          </option>
+        ))}
+      </select>
+    </label>
+  )
+}
+
+/**
  * Bloco de consulta da aba Vagas: cargo, cidade e o botão Buscar.
  *
  * Os dois campos se comportam de formas diferentes de propósito. O cargo é
@@ -798,12 +871,18 @@ function Cabecalho({ aba }) {
  * busca vai precisar ter quando o clique disparar uma API — assíncrona, com
  * carregamento e erro.
  *
- * A janela de publicação é o terceiro campo, e é o único que também recorta o
- * resultado depois que ele chega — `date_posted` na requisição e um segundo
+ * A janela de publicação é o terceiro campo, e é o primeiro que também recorta
+ * o resultado depois que ele chega — `date_posted` na requisição e um segundo
  * corte local, porque a API aceita a janela e nem sempre a cumpre (ver
  * `janela.js`). Ela é deferida como os outros dois: trocar o dropdown não
  * refaz a busca sozinho, porque uma janela mais larga precisa de requisição
  * nova e requisição custa cota.
+ *
+ * A modalidade é o quarto, e tem duas opções porque a API responde uma
+ * pergunta de duas respostas: `work_from_home` é booleano. "Remoto" a manda,
+ * "Presencial" é a ausência dela — e, sendo o complemento e não uma
+ * igualdade, é onde caem também as híbridas e as vagas que vieram sem
+ * modalidade informada. Nada fica sem opção. Ver `modalidade.js`.
  *
  * A aba Banco de Dados não tem este bloco — ela lista o acervo direto, e o
  * acervo não é recortado por data.
@@ -812,16 +891,18 @@ function ConsultaDestaque({
   cargo,
   cidade,
   janela,
+  modalidade,
   onCargo,
   onCidade,
   onJanela,
+  onModalidade,
   onBuscar,
   pendente,
   buscando,
   ranqueando,
 }) {
   return (
-    <div style={{ maxWidth: 860, marginBottom: 14 }}>
+    <div style={{ maxWidth: 980, marginBottom: 14 }}>
       <div
         style={{
           display: 'flex',
@@ -891,29 +972,21 @@ function ConsultaDestaque({
           }}
         />
 
-        <select
-          value={janela}
-          onChange={(e) => onJanela(e.target.value)}
-          aria-label="Data de publicação"
-          title="Só entram vagas publicadas dentro desta janela"
-          style={{
-            flex: '0 0 auto',
-            padding: '7px 10px',
-            borderRadius: 8,
-            border: '1px solid rgba(255,255,255,0.08)',
-            background: '#0B1220',
-            color: '#C8D1E0',
-            fontSize: 12.5,
-            cursor: 'pointer',
-            outline: 'none',
-          }}
-        >
-          {JANELAS.map((j) => (
-            <option key={j.valor} value={j.valor}>
-              {j.rotulo}
-            </option>
-          ))}
-        </select>
+        <FiltroSuspenso
+          rotulo="Data de Publicação"
+          valor={janela}
+          opcoes={JANELAS}
+          onMudar={onJanela}
+          dica="Só entram vagas publicadas dentro desta janela"
+        />
+
+        <FiltroSuspenso
+          rotulo="Modalidade"
+          valor={modalidade}
+          opcoes={OPCOES_MODALIDADE}
+          onMudar={onModalidade}
+          dica="Remoto é pedido à API; Presencial é todo o resto, recortado aqui"
+        />
 
         <button
           onClick={onBuscar}
@@ -980,6 +1053,265 @@ function ConsultaDestaque({
           </svg>
           Critérios alterados — clique em Buscar para aplicar.
         </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * A barra de filtro da aba Banco de Dados.
+ *
+ * Tem a aparência da `ConsultaDestaque` e um comportamento diferente, e a
+ * diferença toda cabe numa frase: **aqui não há requisição**.
+ *
+ * Por isso não tem botão "Buscar" nem o aviso "Critérios alterados". Lá o
+ * adiamento protege as 200 requisições do mês de um filtro que dispararia a
+ * cada tecla; aqui não há o que proteger, e o botão seria um clique que não
+ * evita custo nenhum.
+ *
+ * Os dropdowns são montados a partir do próprio acervo — ver `filtroAcervo.js`
+ * para o porquê, que envolve a lista do IBGE não casar com os rótulos que a
+ * API gravou.
+ *
+ * Um seletor com menos de dois valores distintos não é desenhado: ele só
+ * poderia oferecer o estado em que já está. Volta sozinho quando o acervo
+ * ganhar variedade — hoje, por exemplo, as 35 vagas são todas presenciais, e
+ * um dropdown de modalidade ali seria enfeite.
+ */
+function FiltroDoAcervo({ filtro, opcoes, onFiltro, total, mostrando }) {
+  const comoOpcoes = (lista) => [
+    { valor: '', rotulo: 'Todas' },
+    ...lista.map((o) => ({ valor: o.valor, rotulo: `${o.valor} (${o.quantas})` })),
+  ]
+
+  const mudar = (campo) => (valor) => onFiltro({ ...filtro, [campo]: valor })
+  const filtrando =
+    filtro.texto || filtro.cidade || filtro.modalidade || filtro.janela
+
+  return (
+    <div style={{ maxWidth: 980, marginBottom: 14 }}>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          flexWrap: 'wrap',
+          padding: '14px 16px',
+          borderRadius: 12,
+          border: `1px solid ${filtrando ? 'rgba(59,130,246,0.35)' : 'rgba(255,255,255,0.09)'}`,
+          background: '#0B1220',
+        }}
+      >
+        <svg
+          width="19"
+          height="19"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#60A5FA"
+          strokeWidth="1.9"
+          style={{ flex: '0 0 19px' }}
+        >
+          <circle cx="11" cy="11" r="7" />
+          <path d="M16.5 16.5 21 21" />
+        </svg>
+
+        <input
+          value={filtro.texto}
+          onChange={(e) => mudar('texto')(e.target.value)}
+          placeholder="Filtrar por cargo ou empresa..."
+          aria-label="Filtrar o acervo"
+          spellCheck={false}
+          autoComplete="off"
+          style={{
+            flex: '1 1 220px',
+            minWidth: 0,
+            background: '#0B1220',
+            border: 'none',
+            outline: 'none',
+            color: filtro.texto ? '#E8ECF4' : '#8A94A6',
+            fontSize: 15,
+          }}
+        />
+
+        {opcoes.cidades.length > 1 && (
+          <>
+            <span
+              aria-hidden="true"
+              style={{
+                flex: '0 0 1px',
+                alignSelf: 'stretch',
+                background: 'rgba(255,255,255,0.08)',
+              }}
+            />
+            {/* O mesmo campo da aba Vagas — digitar estreita a lista, e só se
+                escolhe de dentro dela. A lista é a do acervo, não a do IBGE:
+                o rótulo precisa casar exatamente com o que está gravado, e a
+                API grava ora "RS", ora "Rio Grande do Sul". */}
+            <CampoCidade
+              valor={filtro.cidade}
+              onEscolher={mudar('cidade')}
+              // A contagem entra como `nota` e sai entre parênteses na
+              // sugestão. É ela que diferencia "Goiânia, Goiás (8)" de
+              // "Aparecida de Goiânia, Goiás (1)" antes de escolher — sem
+              // isso, só o contador depois do filtro diria.
+              cidades={opcoes.cidades.map((c) => ({
+                rotulo: c.valor,
+                nota: c.quantas,
+              }))}
+            />
+          </>
+        )}
+
+        {opcoes.modalidades.length > 1 && (
+          <FiltroSuspenso
+            rotulo="Modalidade"
+            valor={filtro.modalidade}
+            opcoes={comoOpcoes(opcoes.modalidades)}
+            onMudar={mudar('modalidade')}
+            dica="Só as modalidades que já existem no acervo"
+          />
+        )}
+
+        <FiltroSuspenso
+          rotulo="Data de Publicação"
+          valor={filtro.janela}
+          // O `all` da `JANELAS` sai da lista: no acervo ele e o "sem filtro"
+          // são a mesma coisa — os dois mostram tudo —, e oferecer os dois
+          // punha "Qualquer data" duas vezes no dropdown. Fica o valor vazio,
+          // que é o que o `filtrando` usa para saber se há filtro ativo.
+          opcoes={[
+            { valor: '', rotulo: 'Qualquer data' },
+            ...JANELAS.filter((j) => j.valor !== 'all'),
+          ]}
+          onMudar={mudar('janela')}
+          dica="Recorta pelo tempo desde a publicação, como na aba Vagas"
+        />
+
+        {/* Só aparece quando há o que limpar: um botão permanentemente inerte
+            ensina a ignorá-lo. */}
+        {filtrando && (
+          <button
+            onClick={() => onFiltro(FILTRO_VAZIO)}
+            style={{
+              flex: '0 0 auto',
+              padding: '8px 14px',
+              borderRadius: 9,
+              border: '1px solid rgba(255,255,255,0.12)',
+              background: 'transparent',
+              color: '#C8D1E0',
+              fontSize: 12.5,
+              cursor: 'pointer',
+            }}
+          >
+            Limpar
+          </button>
+        )}
+      </div>
+
+      {/* A conta tem que fechar. Sem ela, um acervo de 35 mostrando 2 pareceria
+          um acervo que perdeu 33. */}
+      {filtrando && (
+        <div style={{ marginTop: 8, fontSize: 12.5, color: '#8A94A6' }}>
+          Mostrando <strong style={{ color: '#C8D1E0' }}>{mostrando}</strong> de{' '}
+          {total} {total === 1 ? 'vaga' : 'vagas'} no acervo
+        </div>
+      )}
+    </div>
+  )
+}
+
+/**
+ * Os dois vazios da aba Banco de Dados.
+ *
+ * Existe separado do `SemResultados` porque as mensagens de lá falam em API e
+ * em cota — "a API não devolveu resultados", "cada nova consulta consome uma
+ * das 200 requisições" —, e nenhuma das duas coisas aconteceu aqui. O acervo é
+ * local: um vazio dele nunca é culpa de uma requisição.
+ *
+ * E são dois vazios diferentes, que pedem saídas opostas: com filtro, o que
+ * falta é afrouxar; sem filtro, o que falta é buscar. Uma mensagem só teria de
+ * mandar fazer as duas coisas, e a metade errada é a que a pessoa tentaria
+ * primeiro.
+ */
+function AcervoVazio({ filtrando, onLimpar }) {
+  return (
+    <div
+      style={{
+        padding: '64px 20px',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: 14,
+      }}
+    >
+      <div
+        style={{
+          width: 50,
+          height: 50,
+          borderRadius: 14,
+          border: '1px solid rgba(255,255,255,0.08)',
+          background: '#0E1729',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+        }}
+      >
+        <svg
+          width="22"
+          height="22"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#8A94A6"
+          strokeWidth="1.7"
+        >
+          <ellipse cx="12" cy="6" rx="8" ry="3" />
+          <path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6" />
+          <path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3" />
+        </svg>
+      </div>
+
+      <div style={{ fontSize: 15, fontWeight: 600 }}>
+        {filtrando ? 'Nenhuma vaga com este filtro' : 'O acervo ainda está vazio'}
+      </div>
+
+      <div
+        style={{
+          fontSize: 13,
+          color: '#8A94A6',
+          textAlign: 'center',
+          maxWidth: 400,
+          lineHeight: 1.6,
+        }}
+      >
+        {filtrando ? (
+          <>
+            O acervo tem vagas, mas nenhuma casa com o que você pediu. Afrouxe
+            os campos acima — filtrar aqui não gasta requisição, então pode
+            tentar à vontade.
+          </>
+        ) : (
+          <>
+            Tudo que a aba Vagas trouxer fica guardado aqui, através das
+            sessões. Faça uma busca por lá e as vagas aparecem neste acervo.
+          </>
+        )}
+      </div>
+
+      {filtrando && (
+        <button
+          onClick={onLimpar}
+          style={{
+            padding: '8px 16px',
+            borderRadius: 9,
+            border: '1px solid rgba(255,255,255,0.12)',
+            background: 'transparent',
+            color: '#C8D1E0',
+            fontSize: 12.5,
+            cursor: 'pointer',
+          }}
+        >
+          Limpar filtro
+        </button>
       )}
     </div>
   )
@@ -1200,7 +1532,7 @@ function LinkDaVaga({ link, rotulo = null }) {
   )
 }
 
-function Linha({ vaga, menuAberto, onMenu, onAbrir, onFavorito, onArquivar }) {
+function Linha({ vaga, menuAberto, onMenu, onAbrir }) {
   const d = derivar(vaga)
   const itemMenu = {
     width: '100%',
@@ -1416,31 +1748,19 @@ function Linha({ vaga, menuAberto, onMenu, onAbrir, onFavorito, onArquivar }) {
               boxShadow: '0 16px 36px rgba(0,0,0,0.55)',
             }}
           >
-            {/* Os três já paravam a propagação no chamador, e é isso que os
-                guarda do clique da linha — "Arquivar" é o caso que dói: sem
-                essa parada ele removeria a vaga e abriria, no mesmo clique, o
-                detalhe de uma vaga que acabou de sair da lista. Mesma
-                advertência do botão acima: não embrulhar aqui. */}
+            {/* O item para a propagação no chamador, e é isso que o guarda do
+                clique da linha inteira. Mesma advertência do botão acima: não
+                embrulhar aqui.
+
+                Foram três itens — "Favoritar" e "Arquivar" saíram. O menu
+                continua existindo por causa do modo estreito, onde a linha
+                vira card e este é o caminho para o detalhe. */}
             <button
               onClick={onAbrir}
               className={classeItemMenu}
               style={itemMenu}
             >
               Ver detalhes
-            </button>
-            <button
-              onClick={onFavorito}
-              className={classeItemMenu}
-              style={itemMenu}
-            >
-              {vaga.fav ? 'Remover favorito' : 'Favoritar'}
-            </button>
-            <button
-              onClick={onArquivar}
-              className={classeItemMenu}
-              style={itemMenu}
-            >
-              Arquivar
             </button>
           </div>
         )}
@@ -1549,13 +1869,18 @@ function Card({ vaga, onAbrir }) {
  * precisa dizer *por que* está vazio, senão parece defeito.
  *
  * São dois vazios diferentes e o texto tem que separá-los: a API não devolveu
- * nada, ou devolveu e a janela de publicação escondeu tudo. Sem essa
- * distinção o segundo caso mente — diria "a API não devolveu resultados"
- * depois de uma requisição que devolveu dez vagas, e o aluno mexeria no cargo
- * e na cidade quando o que estava apertado era a data.
+ * nada, ou devolveu e os recortes locais esconderam tudo. Sem essa distinção
+ * o segundo caso mente — diria "a API não devolveu resultados" depois de uma
+ * requisição que devolveu dez vagas, e o aluno mexeria no cargo e na cidade
+ * quando o que estava apertado era um filtro.
+ *
+ * `rotulos` são os recortes ativos já em português ("Último mês", "Remoto").
+ * O texto os nomeia sem dizer qual deles cortou cada vaga: são dois filtros
+ * encadeados, atribuir a culpa exigiria contar separado, e para quem lê a
+ * pergunta é "o que eu afrouxo?", não "qual dos dois foi".
  */
-function SemResultados({ cidade, ocultadas = 0, rotuloJanela = null }) {
-  const foiAJanela = ocultadas > 0
+function SemResultados({ cidade, ocultadas = 0, rotulos = [] }) {
+  const foiORecorte = ocultadas > 0
   return (
     <div
       style={{
@@ -1591,8 +1916,8 @@ function SemResultados({ cidade, ocultadas = 0, rotuloJanela = null }) {
         </svg>
       </div>
       <div style={{ fontSize: 15, fontWeight: 600 }}>
-        {foiAJanela
-          ? 'Nenhuma vaga dentro desta janela'
+        {foiORecorte
+          ? 'Nenhuma vaga dentro deste recorte'
           : cidade
             ? `Nenhuma vaga em ${cidade}`
             : 'Nenhuma vaga encontrada'}
@@ -1606,18 +1931,18 @@ function SemResultados({ cidade, ocultadas = 0, rotuloJanela = null }) {
           lineHeight: 1.6,
         }}
       >
-        {foiAJanela ? (
+        {foiORecorte ? (
           <>
             A busca devolveu{' '}
             <strong style={{ color: '#C8D1E0', fontWeight: 600 }}>
               {ocultadas}
             </strong>{' '}
             {ocultadas === 1 ? 'vaga' : 'vagas'}, mas{' '}
-            {ocultadas === 1 ? 'ela é mais antiga' : 'todas são mais antigas'}{' '}
-            que “{rotuloJanela}” — ou {ocultadas === 1 ? 'veio' : 'vieram'} sem
-            data de publicação, que costuma ser o caso dos anúncios já
-            encerrados. Escolha uma janela mais larga acima: o recorte é feito
-            aqui, sem gastar requisição.
+            {ocultadas === 1 ? 'ela não passou' : 'nenhuma passou'} pelo
+            recorte de {rotulos.map((r) => `“${r}”`).join(' e ')}. Vaga sem
+            data de publicação fica de fora por padrão, e é o caso comum dos
+            anúncios já encerrados. Afrouxe os filtros acima e clique em
+            Buscar.
           </>
         ) : (
           <>
@@ -2605,10 +2930,55 @@ function PainelControle({ cota, onZerar, onLimparCache, custo, onZerarCusto }) {
 /* ------------------------------ app ------------------------------ */
 
 export default function App() {
-  // Base única: as duas abas leem e escrevem no mesmo banco de vagas.
+  /**
+   * `banco` é o resultado da **busca corrente** — a aba Vagas, e só ela.
+   *
+   * Já foi a base única das duas abas, e era esse o defeito: `buscar()`
+   * substitui esta lista, então a aba Banco de Dados, lendo a mesma coisa,
+   * nunca acumulava nada. Buscar em Porto Alegre depois de Caxias do Sul
+   * deixava só Porto Alegre nas duas telas.
+   *
+   * O acervo agora é outro estado, com store próprio em `acervo.js`. A
+   * separação também resolve dois efeitos colaterais de graça: o
+   * `setBanco([])` do caminho de erro esvazia a busca sem encostar no
+   * histórico, e o acervo reidrata do localStorage em vez de renascer do
+   * `BANCO_DE_VAGAS`, que está vazio.
+   */
   const [banco, setBanco] = useState(BANCO_DE_VAGAS)
 
+  /**
+   * O acervo: tudo que a busca já trouxe, através das sessões.
+   *
+   * Inicializado por função para o localStorage ser lido uma vez só, no
+   * primeiro render, e não a cada re-render. A semeadura é a carga inicial a
+   * partir do `cota.cache` — ver `semear` em `acervo.js`; ela acontece uma
+   * vez e só na primeira, senão vaga apagada voltaria a cada recarregamento.
+   */
+  const [acervo, setAcervo] = useState(() => {
+    const guardado = lerAcervo()
+    if (guardado.semeado) return guardado.vagas
+    const doCache = Object.values(lerCota().cache ?? {}).flatMap((e) =>
+      Array.isArray(e?.vagas) ? e.vagas : [],
+    )
+    return semear(doCache).vagas
+  })
+
+  /**
+   * Arquiva o que a busca trouxe e mantém o estado da tela em sincronia.
+   *
+   * Um ponto só para todos os caminhos que produzem vagas — rede, cache e
+   * "Carregar mais" —, porque três chamadas espalhadas seriam três lugares
+   * para esquecer de arquivar na próxima mudança.
+   */
+  function arquivar(vagas) {
+    if (!vagas?.length) return
+    setAcervo(guardarVagas(vagas).vagas)
+  }
+
   const [aba, setAba] = useState('vagas')
+  // O filtro da aba Banco de Dados. Sem par rascunho/efetivo — ele recorta a
+  // cada tecla, porque recortar o acervo não custa requisição nenhuma.
+  const [filtroAcervo, setFiltroAcervo] = useState(FILTRO_VAZIO)
   // Cargo e cidade existem em dois tempos: o rascunho é o que os seletores do
   // bloco de destaque mostram, e `cargo`/`cidade` são os critérios da consulta
   // já feita. `buscar()` promove um no outro. Os demais filtros não têm
@@ -2636,6 +3006,18 @@ export default function App() {
   // "Carregar mais" precisa repetir: o cursor pertence à busca que o gerou, e
   // pedir a próxima página com outro `date_posted` misturaria dois recortes.
   const [janelaBaixada, setJanelaBaixada] = useState(JANELA_PADRAO)
+  // A modalidade repete o par rascunho/efetivo, mas o `modalidadeBaixada` tem
+  // um papel mais estreito que o da janela: das duas opções só "Remoto" vira
+  // parâmetro (`work_from_home=true`); "Presencial" é a ausência dele, e todo
+  // o trabalho dela é recorte local. Ver `modalidade.js`.
+  //
+  // Guardar a baixada ainda assim é o que mantém o "Carregar mais" honesto: o
+  // cursor pertence à requisição que o gerou, e pedir a página seguinte com
+  // outro `work_from_home` misturaria dois resultados diferentes na mesma
+  // lista.
+  const [modalidadeRascunho, setModalidadeRascunho] = useState(MODALIDADE_PADRAO)
+  const [modalidade, setModalidade] = useState(MODALIDADE_PADRAO)
+  const [modalidadeBaixada, setModalidadeBaixada] = useState(MODALIDADE_PADRAO)
   const [consultaFeita, setConsultaFeita] = useState(false)
   const [buscando, setBuscando] = useState(false)
   const [erroBusca, setErroBusca] = useState(null)
@@ -2793,17 +3175,75 @@ export default function App() {
   // `date_posted` e nem sempre o cumpre (`week` voltou vaga de 26 dias no
   // teste real), e o Banco de Dados é acervo — recortar o histórico por
   // "última semana" esconderia o que ele existe para guardar.
+  // As opções dos dropdowns saem do acervo inteiro, não do que está filtrado:
+  // montá-las do recorte faria a cidade escolhida ser a única oferecida, e
+  // não haveria como trocar de cidade sem antes limpar o filtro.
+  const opcoesAcervo = useMemo(() => opcoesDoAcervo(acervo), [acervo])
+
+  const { visiveis: acervoFiltrado } = useMemo(
+    () => filtrarAcervo(acervo, filtroAcervo),
+    [acervo, filtroAcervo],
+  )
+
+  /**
+   * De onde a tabela tira as linhas — e é aqui que as duas abas deixam de ser
+   * a mesma coisa.
+   *
+   * A aba Vagas mostra a busca corrente (`banco`); a Banco de Dados mostra o
+   * acervo, que atravessa buscas e sessões. Enquanto as duas liam `banco`, a
+   * segunda não tinha como acumular: `buscar()` substitui essa lista.
+   */
+  const listaDaAba = aba === 'banco' ? acervoFiltrado : banco
+
   const { visiveis: dentroDaJanela, ocultadas: ocultadasPelaJanela } = useMemo(
     () =>
       aba === 'vagas'
-        ? filtrarPorJanela(banco, janela)
-        : { visiveis: banco, ocultadas: 0 },
-    [banco, janela, aba],
+        ? filtrarPorJanela(listaDaAba, janela)
+        : { visiveis: listaDaAba, ocultadas: 0 },
+    [listaDaAba, janela, aba],
+  )
+
+  // O segundo recorte local, encadeado no primeiro. Roda mesmo quando a busca
+  // pediu `work_from_home=true`, pelo motivo que o `date_posted` já provou:
+  // esta API aceita um filtro e nem sempre o cumpre (ver `janela.js`). Sem
+  // ele, bastaria uma híbrida classificada como "work from home" na origem
+  // para aparecer na tela sob o rótulo "Remoto".
+  //
+  // Para híbrido e presencial não é reforço, é o filtro inteiro: a API não tem
+  // parâmetro nenhum para eles.
+  const { visiveis: dentroDoRecorte, ocultadas: ocultadasPelaModalidade } =
+    useMemo(
+      () =>
+        aba === 'vagas'
+          ? filtrarPorModalidade(dentroDaJanela, modalidade)
+          : { visiveis: dentroDaJanela, ocultadas: 0 },
+      [dentroDaJanela, modalidade, aba],
+    )
+
+  // A conta que a tela mostra é a soma: quem olha quer saber quantas vagas a
+  // busca trouxe e não estão à vista, não por qual dos dois filtros cada uma
+  // saiu.
+  const ocultadasPeloRecorte = ocultadasPelaJanela + ocultadasPelaModalidade
+
+  /**
+   * Os recortes ativos, em texto, para o aviso poder nomeá-los.
+   *
+   * Os dois entram sempre. Enquanto o dropdown de modalidade tinha um "Todas",
+   * havia uma escolha que não recortava nada e citá-la faria a tela dizer que
+   * escondeu vagas "fora de Todas"; com duas opções complementares, qualquer
+   * uma das duas está de fato escondendo a outra metade.
+   */
+  const rotulosDoRecorte = useMemo(
+    () =>
+      [janelaDe(janela)?.rotulo, modalidadeDe(modalidade)?.rotulo].filter(
+        Boolean,
+      ),
+    [janela, modalidade],
   )
 
   const filtradas = useMemo(
-    () => ordenar(dentroDaJanela, ordem, direcao),
-    [dentroDaJanela, ordem, direcao],
+    () => ordenar(dentroDoRecorte, ordem, direcao),
+    [dentroDoRecorte, ordem, direcao],
   )
 
   /**
@@ -2821,9 +3261,23 @@ export default function App() {
    */
   const paginaNoCache = useMemo(() => {
     if (aba !== 'vagas' || !consultaFeita) return null
-    const chave = chaveDaConsulta(cargo.trim(), cidade.trim(), janelaBaixada)
+    const chave = chaveDaConsulta(
+      cargo.trim(),
+      cidade.trim(),
+      janelaBaixada,
+      modalidadeBaixada,
+    )
     return proximaPagina(chave ? cota.cache?.[chave] : null, banco.length)
-  }, [aba, consultaFeita, cargo, cidade, janelaBaixada, banco.length, cota])
+  }, [
+    aba,
+    consultaFeita,
+    cargo,
+    cidade,
+    janelaBaixada,
+    modalidadeBaixada,
+    banco.length,
+    cota,
+  ])
 
   const total = filtradas.length
   const maxPagina = Math.max(1, Math.ceil(total / porPagina))
@@ -2844,7 +3298,7 @@ export default function App() {
   // buscar pelo id a cada render evita mostrar um registro que já saiu. A
   // busca olha as duas listas — banco e Vaga Inteligente — e a ordem entre
   // elas está explicada em `detalhe.js`.
-  const detalhe = acharVaga(vagaAberta, banco, vagasIa)
+  const detalhe = acharVaga(vagaAberta, banco, vagasIa, acervo)
 
   // A Vaga Inteligente não tem dropdown — o cargo dela sai do currículo, não
   // de um formulário — mas sofre do mesmo defeito e recebe o mesmo remédio na
@@ -2890,6 +3344,7 @@ export default function App() {
     const termo = cargoRascunho.trim()
     const cidadeAlvo = cidadeRascunho.trim()
     const janelaAlvo = janelaRascunho
+    const modalidadeAlvo = modalidadeRascunho
     if (!termo && !cidadeAlvo) {
       setErroBusca('Informe ao menos o cargo ou a cidade para buscar.')
       return
@@ -2899,21 +3354,32 @@ export default function App() {
     // recorte é local, sem rede e sem ranking novo — as notas já estão nas
     // vagas que estão na tela. É o que permite apertar o dropdown de "Último
     // mês" para "Última semana" sem gastar uma das 200 requisições do mês.
+    //
+    // A modalidade entra pelo `soRemotas`, e não por um `cabeNoQueJaTemos`
+    // próprio, porque só o booleano muda a requisição: sair de "Todas" para
+    // "Híbrido" ou "Presencial" é puro recorte do que já está na tela, e vale
+    // o mesmo atalho. Ir para "Remoto" — ou voltar dele — pede rede, porque a
+    // API foi perguntada outra coisa e tem remotas a mais para devolver.
     if (
       consultaFeita &&
       banco.length > 0 &&
       termo === cargo.trim() &&
       cidadeAlvo === cidade.trim() &&
-      cabeNoQueJaTemos(janelaAlvo, janelaBaixada)
+      cabeNoQueJaTemos(janelaAlvo, janelaBaixada) &&
+      soRemotas(modalidadeAlvo) === soRemotas(modalidadeBaixada)
     ) {
       setCargo(cargoRascunho)
       setCidade(cidadeRascunho)
       setJanela(janelaAlvo)
+      setModalidade(modalidadeAlvo)
       setPagina(1)
       setErroBusca(null)
       setErroRanking(null)
       setCota(
-        registrarUso(termo, cidadeAlvo, 'cache', { janela: janelaBaixada }),
+        registrarUso(termo, cidadeAlvo, 'cache', {
+          janela: janelaBaixada,
+          modalidade: modalidadeBaixada,
+        }),
       )
       return
     }
@@ -2921,6 +3387,7 @@ export default function App() {
     setCargo(cargoRascunho)
     setCidade(cidadeRascunho)
     setJanela(janelaAlvo)
+    setModalidade(modalidadeAlvo)
     setErroBusca(null)
     setErroRanking(null)
     setPagina(1)
@@ -2928,7 +3395,12 @@ export default function App() {
     // dentro de outra busca e pediria a página seguinte da lista errada.
     setCursor(null)
 
-    const guardado = consultarCache(termo, cidadeAlvo, janelaAlvo)
+    const guardado = consultarCache(
+      termo,
+      cidadeAlvo,
+      janelaAlvo,
+      modalidadeAlvo,
+    )
     if (guardado) {
       // **Só a primeira página.** O `carregarMais` grava a lista acumulada
       // sob esta mesma chave — necessário, senão a repetição perderia o que
@@ -2937,11 +3409,18 @@ export default function App() {
       // anterior. As seguintes continuam guardadas e saem pelo botão.
       const primeira = proximaPagina(guardado, 0) ?? guardado.vagas
       setJanelaBaixada(janelaAlvo)
+      setModalidadeBaixada(modalidadeAlvo)
       setBanco(primeira)
+      arquivar(primeira)
       // Sem restaurar o cursor, repetir a busca traria as vagas de volta e o
       // botão de carregar mais sumiria — como se a consulta tivesse acabado.
       setCursor(guardado.cursor ?? null)
-      setCota(registrarUso(termo, cidadeAlvo, 'cache', { janela: janelaAlvo }))
+      setCota(
+        registrarUso(termo, cidadeAlvo, 'cache', {
+          janela: janelaAlvo,
+          modalidade: modalidadeAlvo,
+        }),
+      )
       setConsultaFeita(true)
       await ranquearPendentes(primeira)
       return
@@ -2954,17 +3433,21 @@ export default function App() {
         montarConsulta(termo, cidadeAlvo),
         null,
         janelaAlvo,
+        modalidadeAlvo,
       )
       const vagas = mapearVagas(vagasDaResposta(resposta))
       const proximo = cursorDaResposta(resposta)
       setJanelaBaixada(janelaAlvo)
+      setModalidadeBaixada(modalidadeAlvo)
       setBanco(vagas)
+      arquivar(vagas)
       setCursor(proximo)
       setCota(
         registrarUso(termo, cidadeAlvo, 'rede', {
           vagas,
           cursor: proximo,
           janela: janelaAlvo,
+          modalidade: modalidadeAlvo,
           // A busca é sempre uma página. É esta fronteira que o "Buscar" de
           // amanhã usa para não devolver a lista acumulada inteira.
           paginas: vagas.length ? [vagas.length] : null,
@@ -2982,7 +3465,12 @@ export default function App() {
       setConsultaFeita(true)
       // Um erro que chegou à API consumiu uma das 200 mesmo sem devolver vaga.
       if (erro.tocouApi) {
-        setCota(registrarUso(termo, cidadeAlvo, 'rede', { janela: janelaAlvo }))
+        setCota(
+          registrarUso(termo, cidadeAlvo, 'rede', {
+            janela: janelaAlvo,
+            modalidade: modalidadeAlvo,
+          }),
+        )
       }
     } finally {
       setBuscando(false)
@@ -3024,8 +3512,12 @@ export default function App() {
     if (paginaNoCache) {
       const doCache = paginaNoCache
       setBanco((atual) => [...atual, ...doCache])
+      arquivar(doCache)
       setCota(
-        registrarUso(termo, cidadeAlvo, 'cache', { janela: janelaBaixada }),
+        registrarUso(termo, cidadeAlvo, 'cache', {
+          janela: janelaBaixada,
+          modalidade: modalidadeBaixada,
+        }),
       )
       await ranquearPendentes(doCache, banco)
       return
@@ -3048,6 +3540,7 @@ export default function App() {
         montarConsulta(termo, cidadeAlvo),
         cursor,
         janelaBaixada,
+        modalidadeBaixada,
       )
       const novas = mapearVagas(vagasDaResposta(resposta))
       const proximo = cursorDaResposta(resposta)
@@ -3059,17 +3552,24 @@ export default function App() {
       listaCompleta = [...banco, ...apenasNovas]
 
       setBanco(listaCompleta)
+      arquivar(apenasNovas)
       setCursor(proximo)
       // A fronteira da página nova entra na lista de fronteiras. Página que
       // só trouxe repetidas não vira fronteira: um tamanho zero não é página,
       // e faria `proximaPagina` servir uma fatia vazia para sempre.
-      const entradaAtual = consultarCache(termo, cidadeAlvo, janelaBaixada)
+      const entradaAtual = consultarCache(
+        termo,
+        cidadeAlvo,
+        janelaBaixada,
+        modalidadeBaixada,
+      )
       const paginasAtuais = paginasDoCache(entradaAtual)
       setCota(
         registrarUso(termo, cidadeAlvo, 'rede', {
           vagas: listaCompleta,
           cursor: proximo,
           janela: janelaBaixada,
+          modalidade: modalidadeBaixada,
           paginas: apenasNovas.length
             ? [...paginasAtuais, apenasNovas.length]
             : paginasAtuais,
@@ -3085,7 +3585,10 @@ export default function App() {
       // e o erro é da página nova, não dela.
       if (erro.tocouApi) {
         setCota(
-          registrarUso(termo, cidadeAlvo, 'rede', { janela: janelaBaixada }),
+          registrarUso(termo, cidadeAlvo, 'rede', {
+            janela: janelaBaixada,
+            modalidade: modalidadeBaixada,
+          }),
         )
       }
     } finally {
@@ -3164,6 +3667,9 @@ export default function App() {
       // `mesclarRank` mapeia sobre a lista atual e só substitui quem voltou:
       // as vagas antigas mantêm a nota que já custou uma chamada.
       setBanco((atual) => mesclarRank(atual, ranqueadas))
+      // A nota vai para o acervo junto: ela custou uma chamada à Claude, e
+      // sem isto uma vaga arquivada perderia o rank ao trocar de aba.
+      setAcervo(guardarVagas(ranqueadas).vagas)
     } catch (err) {
       setErroRanking(mensagemDoErro(err))
     } finally {
@@ -3201,7 +3707,8 @@ export default function App() {
   const consultaPendente =
     cargoRascunho !== cargo ||
     cidadeRascunho !== cidade ||
-    janelaRascunho !== janela
+    janelaRascunho !== janela ||
+    modalidadeRascunho !== modalidade
 
   /**
    * Busca inteligente de verdade: o cargo não é digitado, sai do perfil que
@@ -3337,20 +3844,40 @@ export default function App() {
     setPagina(1)
   }
 
+  /**
+   * Mexer no filtro volta para a primeira página.
+   *
+   * Sem isto, estreitar o filtro estando na página 3 mostra uma tabela vazia
+   * com a paginação dizendo que há resultados — o `Math.min` do `paginaAtual`
+   * corrige o índice no render seguinte, mas o quadro intermediário lê como
+   * defeito.
+   */
+  function mudarFiltroAcervo(novo) {
+    setFiltroAcervo(novo)
+    setPagina(1)
+  }
+
   function ordenarPor(chave) {
     setDirecao((d) => (ordem === chave ? (d === 'asc' ? 'desc' : 'asc') : 'desc'))
     setOrdem(chave)
     setPagina(1)
   }
 
+  /**
+   * Escrita passante: marcar como lida vale nas duas listas.
+   *
+   * A mesma vaga pode estar na busca corrente e no acervo ao mesmo tempo.
+   * Gravar só numa faria a outra aba mostrar bandeirinha velha — e como o
+   * acervo é o que persiste, seria a marca que some no recarregamento.
+   *
+   * Hoje o único chamador é o `seen` de `abrirVaga`; "Favoritar" era o outro,
+   * e saiu do menu. A função continua genérica porque a passagem pelas duas
+   * listas é a parte que custa acertar, não o `fn`.
+   */
   function alterarVaga(id, fn) {
     setMenu(null)
     setBanco((lista) => lista.map((x) => (x.id === id ? fn(x) : x)))
-  }
-
-  function arquivarVaga(id) {
-    setMenu(null)
-    setBanco((lista) => lista.filter((x) => x.id !== id))
+    setAcervo(atualizarNoAcervo(id, fn).vagas)
   }
 
   function salvarVaga() {
@@ -3380,6 +3907,9 @@ export default function App() {
       fav: false,
     }
     setBanco((lista) => [nova, ...lista])
+    // Vaga cadastrada à mão não pertence a consulta nenhuma, então o cache
+    // não tem onde guardá-la: o acervo é o único lugar em que ela sobrevive.
+    arquivar([nova])
     setModalAberto(false)
     setPagina(1)
     setForm(FORM_VAZIO)
@@ -3427,16 +3957,28 @@ export default function App() {
 
         {ehTabela && !detalhe && (
           <div>
+            {aba === 'banco' && (
+              <FiltroDoAcervo
+                filtro={filtroAcervo}
+                opcoes={opcoesAcervo}
+                onFiltro={mudarFiltroAcervo}
+                total={acervo.length}
+                mostrando={acervoFiltrado.length}
+              />
+            )}
+
             {aba === 'vagas' && (
               <ConsultaDestaque
                 cargo={cargoRascunho}
                 cidade={cidadeRascunho}
                 janela={janelaRascunho}
+                modalidade={modalidadeRascunho}
                 onCargo={(e) => setCargoRascunho(e.target.value)}
                 // O combobox entrega o rótulo já escolhido da lista, não um
                 // evento: não há texto digitado virando valor.
                 onCidade={setCidadeRascunho}
                 onJanela={setJanelaRascunho}
+                onModalidade={setModalidadeRascunho}
                 onBuscar={buscar}
                 pendente={consultaPendente}
                 buscando={buscando}
@@ -3480,12 +4022,12 @@ export default function App() {
                     {/* A conta tem que fechar: sem isto, uma busca que trouxe
                         dez vagas e mostrou três pareceria a API devolvendo
                         menos do que devolveu. */}
-                    {ocultadasPelaJanela > 0 && (
+                    {ocultadasPeloRecorte > 0 && (
                       <>
                         {' · '}
-                        {ocultadasPelaJanela}{' '}
-                        {ocultadasPelaJanela === 1 ? 'oculta' : 'ocultas'} fora
-                        de “{janelaDe(janela)?.rotulo}”
+                        {ocultadasPeloRecorte}{' '}
+                        {ocultadasPeloRecorte === 1 ? 'oculta' : 'ocultas'} fora
+                        de {rotulosDoRecorte.map((r) => `“${r}”`).join(' e ')}
                       </>
                     )}
                   </div>
@@ -3526,14 +4068,6 @@ export default function App() {
                             e?.stopPropagation()
                             abrirVaga(vaga.id)
                           }}
-                          onFavorito={(e) => {
-                            e.stopPropagation()
-                            alterarVaga(vaga.id, (x) => ({ ...x, fav: !x.fav }))
-                          }}
-                          onArquivar={(e) => {
-                            e.stopPropagation()
-                            arquivarVaga(vaga.id)
-                          }}
                         />
                       ))}
                     </div>
@@ -3551,15 +4085,22 @@ export default function App() {
                     </div>
                   )}
   
-                  {total === 0 && (
-                    <SemResultados
-                      cidade={cidade}
-                      // Só na aba Vagas: o Banco de Dados não é recortado por
-                      // data, e um "ocultadas" ali seria sempre zero.
-                      ocultadas={aba === 'vagas' ? ocultadasPelaJanela : 0}
-                      rotuloJanela={janelaDe(janela)?.rotulo}
-                    />
-                  )}
+                  {/* Cada aba explica o próprio vazio. O do acervo nunca é
+                      culpa de uma requisição, então a mensagem que fala em API
+                      e cota mandaria mexer no lugar errado. */}
+                  {total === 0 &&
+                    (aba === 'banco' ? (
+                      <AcervoVazio
+                        filtrando={acervo.length > 0}
+                        onLimpar={() => mudarFiltroAcervo(FILTRO_VAZIO)}
+                      />
+                    ) : (
+                      <SemResultados
+                        cidade={cidade}
+                        ocultadas={aba === 'vagas' ? ocultadasPeloRecorte : 0}
+                        rotulos={rotulosDoRecorte}
+                      />
+                    ))}
   
                   <Paginacao
                     total={total}

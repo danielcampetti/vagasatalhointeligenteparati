@@ -12,18 +12,45 @@ function semAcento(texto) {
 }
 
 /**
- * Índice de busca das cidades, montado uma vez no carregamento do módulo.
+ * Prepara os rótulos para busca.
  *
  * `sem` é o rótulo sem acento e em minúsculas. Sem isso, digitar "sao paulo"
  * não acharia "São Paulo" — e como quase ninguém digita acento, o campo
  * pareceria quebrado logo no caso mais óbvio.
  */
-const CIDADES_INDEXADAS = CIDADES.map((rotulo) => ({
-  rotulo,
-  sem: semAcento(rotulo),
-  // O nome sem a UF, para reconhecer quem digitou a cidade inteira.
-  nomeSem: semAcento(rotulo.slice(0, rotulo.lastIndexOf(', '))),
-}))
+function indexar(entradas) {
+  return entradas.map((entrada) => {
+    // Aceita `"Caxias do Sul, RS"` e `{ rotulo, nota }`. A forma simples é a do
+    // IBGE, que não tem o que anotar; a outra é de quem quer mostrar um número
+    // ao lado, como a contagem de vagas do acervo.
+    const rotulo = typeof entrada === 'string' ? entrada : entrada.rotulo
+    const nota = typeof entrada === 'string' ? null : (entrada.nota ?? null)
+    return {
+      rotulo,
+      nota,
+      // Só o rótulo é indexado. A nota fica de fora de propósito: digitar "8"
+      // não pode trazer as cidades que têm 8 vagas — o campo é de cidade.
+      sem: semAcento(rotulo),
+      // O nome sem a UF, para reconhecer quem digitou a cidade inteira. Nem
+      // todo rótulo tem vírgula — `lastIndexOf` devolve -1 e o `slice` daria a
+      // string ao contrário —, então sem vírgula o nome é o rótulo inteiro.
+      nomeSem: semAcento(
+        rotulo.includes(', ')
+          ? rotulo.slice(0, rotulo.lastIndexOf(', '))
+          : rotulo,
+      ),
+    }
+  })
+}
+
+/**
+ * O índice do IBGE, montado uma vez no carregamento do módulo.
+ *
+ * Fora do componente de propósito: são 5.571 municípios varridos a cada tecla,
+ * e reindexá-los a cada render seria pagar o custo à toa. Uma lista injetada é
+ * indexada sob demanda — quem injeta passa dezenas de itens, não milhares.
+ */
+const IBGE_INDEXADO = indexar(CIDADES)
 
 /** Quantas linhas o dropdown mostra por vez. "santa" casa com 199 cidades. */
 const TETO_SUGESTOES = 40
@@ -39,14 +66,35 @@ const TETO_SUGESTOES = 40
  * Casa por trecho, não só por prefixo — "sul" encontra "Caxias do Sul" —, mas
  * quem começa com o termo vem primeiro, senão "cax" enterraria Caxias sob
  * qualquer município que só a contenha no meio do nome.
+ *
+ * `cidades` troca a lista oferecida. Omitida, são os 5.571 municípios do IBGE:
+ * é o que a aba Vagas precisa, porque a API exige o rótulo exato e a busca
+ * pode ir a qualquer lugar do país.
+ *
+ * A aba Banco de Dados passa a lista do próprio acervo, e a diferença não é
+ * de conveniência: os rótulos gravados vêm do `job_city` + `job_state` da API,
+ * que ora manda a sigla, ora o nome por extenso. Convivem lá dentro "Caxias do
+ * Sul, RS" e "Porto Alegre, Rio Grande do Sul" — oferecer o "Porto Alegre, RS"
+ * do IBGE devolveria zero vaga, sem dizer por quê.
+ *
+ * Cada item pode ser uma string ou `{ rotulo, nota }`. A `nota` aparece entre
+ * parênteses ao lado da sugestão — o acervo a usa para a contagem de vagas,
+ * que é o que faz escolher entre "Goiânia, Goiás (8)" e "Aparecida de Goiânia,
+ * Goiás (1)". Ela é enfeite de exibição: não entra na busca e não sai no
+ * `onEscolher`, que devolve o rótulo puro para casar com o dado.
  */
-export default function CampoCidade({ valor, onEscolher }) {
+export default function CampoCidade({ valor, onEscolher, cidades }) {
   const [texto, setTexto] = useState('')
   const [aberto, setAberto] = useState(false)
   const [destaque, setDestaque] = useState(0)
   const listaRef = useRef(null)
 
   const termo = semAcento(texto.trim())
+
+  const indexadas = useMemo(
+    () => (cidades ? indexar(cidades) : IBGE_INDEXADO),
+    [cidades],
+  )
 
   /*
    * Três níveis de relevância, nesta ordem:
@@ -64,21 +112,21 @@ export default function CampoCidade({ valor, onEscolher }) {
   const { lista: sugestoes, total } = useMemo(() => {
     if (!termo) {
       return {
-        lista: CIDADES_INDEXADAS.slice(0, TETO_SUGESTOES),
-        total: CIDADES_INDEXADAS.length,
+        lista: indexadas.slice(0, TETO_SUGESTOES),
+        total: indexadas.length,
       }
     }
     const exatas = []
     const comeca = []
     const contem = []
-    for (const c of CIDADES_INDEXADAS) {
+    for (const c of indexadas) {
       if (c.nomeSem === termo) exatas.push(c)
       else if (c.sem.startsWith(termo)) comeca.push(c)
       else if (c.sem.includes(termo)) contem.push(c)
     }
     const todas = [...exatas, ...comeca, ...contem]
     return { lista: todas.slice(0, TETO_SUGESTOES), total: todas.length }
-  }, [termo])
+  }, [termo, indexadas])
 
   // Mantém a linha destacada visível ao navegar pelo teclado.
   useEffect(() => {
@@ -234,6 +282,11 @@ export default function CampoCidade({ valor, onEscolher }) {
                   }}
                 >
                   {c.rotulo}
+                  {c.nota != null && (
+                    <span style={{ color: '#6E7789', marginLeft: 6 }}>
+                      ({c.nota})
+                    </span>
+                  )}
                 </div>
               ))}
               {total > sugestoes.length && (

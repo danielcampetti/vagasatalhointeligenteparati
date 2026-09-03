@@ -10,7 +10,8 @@
  * até existir um endpoint de produção que guarde a chave fora do navegador.
  */
 
-import { JANELAS, JANELA_PADRAO } from '../janela'
+import { JANELA_PADRAO, apiDaJanela } from '../janela'
+import { MODALIDADE_PADRAO, soRemotas } from '../modalidade'
 
 const ENDPOINT = '/api/jsearch/search-v2'
 
@@ -59,16 +60,38 @@ const MENSAGENS = {
  * agora é `month`, que na mesma consulta devolveu 10 vagas todas datadas.
  *
  * Valor desconhecido cai no padrão em vez de seguir para a API: `date_posted`
- * inválido é 400, e um 400 debita cota igual.
+ * inválido é 400, e um 400 debita cota igual. Pela mesma razão a janela passa
+ * pelo `apiDaJanela` — a tela oferece "Últimos 15 dias", que o enum da API não
+ * tem, e quem traduz é o `janela.js`.
+ *
+ * `modalidade` não existe como filtro no `/search-v2` — existe
+ * `work_from_home`, booleano, "Only return work from home / remote jobs". Por
+ * isso o dropdown tem dois valores e não quatro: a pergunta que a tela faz é a
+ * mesma que a API responde. 'remoto' manda o parâmetro; 'presencial' é a
+ * ausência dele e sai daqui sem deixar rastro na URL. Quem decide é o
+ * `soRemotas` (ver `modalidade.js`), que também recusa valor desconhecido pelo
+ * motivo de sempre: 400 custa uma das 200 do mês.
+ *
+ * O parâmetro só aparece quando é `true`. `work_from_home=false` pede
+ * exatamente o que a omissão já pede, e um parâmetro a mais é uma chance a
+ * mais de a API mudar de ideia sobre como interpretá-lo.
  */
-export function montarUrl(consulta, cursor = null, janela = JANELA_PADRAO) {
-  const conhecida = JANELAS.some((j) => j.valor === janela)
+export function montarUrl(
+  consulta,
+  cursor = null,
+  janela = JANELA_PADRAO,
+  modalidade = MODALIDADE_PADRAO,
+) {
   const params = new URLSearchParams({
     query: consulta,
     ...PARAMS_FIXOS,
-    date_posted: conhecida ? janela : JANELA_PADRAO,
+    // `apiDaJanela`, não a janela crua: "Últimos 15 dias" não existe no enum
+    // do `date_posted` e vai como `month`, com os 15 dias saindo do corte
+    // local. Valor desconhecido também cai no padrão ali dentro.
+    date_posted: apiDaJanela(janela),
   })
   if (cursor) params.set('cursor', cursor)
+  if (soRemotas(modalidade)) params.set('work_from_home', 'true')
   return `${ENDPOINT}?${params.toString()}`
 }
 
@@ -109,8 +132,9 @@ export async function buscarVagas(
   consulta,
   cursor = null,
   janela = JANELA_PADRAO,
+  modalidade = MODALIDADE_PADRAO,
 ) {
-  const url = montarUrl(consulta, cursor, janela)
+  const url = montarUrl(consulta, cursor, janela, modalidade)
 
   let res
   try {

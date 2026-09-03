@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'vitest'
 import { PARAMS_FIXOS, cursorDaResposta, montarUrl } from './jsearch'
-import { JANELA_PADRAO } from '../janela'
+import { JANELAS, JANELA_PADRAO } from '../janela'
 
 // Primeiro teste deste módulo. Ele nasceu junto com a paginação por cursor:
 // até aqui o `jsearch.js` só sabia pedir a primeira página, e a única coisa
@@ -62,10 +62,77 @@ describe('montarUrl: janela de publicação', () => {
     expect(params.get('date_posted')).toBe(JANELA_PADRAO)
   })
 
+  /**
+   * A janela que a API não tem. `date_posted` é enum fechado (all, today,
+   * 3days, week, month) e `15dias` não está nele — mandá-lo seria 400, que
+   * debita cota. Vai `month`, e os 15 dias saem do corte local.
+   */
+  test('15 dias pede month à API, não "15dias"', () => {
+    const params = paramsDe(montarUrl('x', null, '15dias'))
+    expect(params.get('date_posted')).toBe('month')
+  })
+
+  test('nenhuma janela manda para a API um valor fora do enum dela', () => {
+    const enumDaApi = ['all', 'today', '3days', 'week', 'month']
+    for (const j of JANELAS) {
+      expect(enumDaApi).toContain(paramsDe(montarUrl('x', null, j.valor)).get('date_posted'))
+    }
+  })
+
   test('janela e cursor convivem: carregar mais não perde o recorte', () => {
     const params = paramsDe(montarUrl('x', 'CURSOR9', 'week'))
     expect(params.get('cursor')).toBe('CURSOR9')
     expect(params.get('date_posted')).toBe('week')
+  })
+})
+
+/**
+ * A doc do `/search-v2` não tem parâmetro de "modalidade": tem
+ * `work_from_home`, booleano, "Only return work from home / remote jobs".
+ * `work_arrangement` é o campo da *resposta*, e mandá-lo no pedido seria um
+ * 400 — que debita cota igual a uma busca boa. Ver `modalidade.js`.
+ *
+ * O dropdown tem duas opções porque a API responde uma pergunta de duas
+ * respostas. Só uma delas vira parâmetro: "Presencial" é a ausência de
+ * `work_from_home`, e todo o seu trabalho é corte local.
+ */
+describe('montarUrl: modalidade', () => {
+  const paramsDe = (url) => new URLSearchParams(url.split('?')[1])
+
+  test('sem modalidade explícita não manda work_from_home', () => {
+    expect(paramsDe(montarUrl('x')).has('work_from_home')).toBe(false)
+  })
+
+  test('remoto vira work_from_home=true', () => {
+    const params = paramsDe(montarUrl('x', null, 'month', 'remoto'))
+    expect(params.get('work_from_home')).toBe('true')
+  })
+
+  // Mandar `work_from_home=false` pediria exatamente o que a omissão já pede,
+  // com uma chance a mais de a API mudar de ideia sobre como interpretá-lo.
+  test('presencial não manda parâmetro nenhum, nem false', () => {
+    const params = paramsDe(montarUrl('x', null, 'month', 'presencial'))
+    expect(params.has('work_from_home')).toBe(false)
+  })
+
+  /**
+   * Mesma defesa que a janela desconhecida já tem, pelo mesmo motivo — e ela
+   * tem um segundo uso agora: 'todas' e 'hibrido' foram opções de uma versão
+   * anterior e podem estar no localStorage de alguém. Caem aqui, e o pior que
+   * acontece é a busca sair sem o parâmetro.
+   */
+  test('modalidade desconhecida não vira parâmetro torto', () => {
+    for (const morto of ['teletrabalho', 'todas', 'hibrido']) {
+      const params = paramsDe(montarUrl('x', null, 'month', morto))
+      expect(params.has('work_from_home')).toBe(false)
+    }
+  })
+
+  test('modalidade, janela e cursor convivem numa URL só', () => {
+    const params = paramsDe(montarUrl('x', 'CURSOR9', 'week', 'remoto'))
+    expect(params.get('cursor')).toBe('CURSOR9')
+    expect(params.get('date_posted')).toBe('week')
+    expect(params.get('work_from_home')).toBe('true')
   })
 })
 

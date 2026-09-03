@@ -860,6 +860,98 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
   de dar a mudança por encerrada.
 - **Nomes de campo da API: confira, não deduza.** Já custou duas colunas
   vazias. `job_is_remote` não existe; o certo é `work_arrangement`.
+- **E o nome do *parâmetro* não é o nome do *campo*.** Ao montar o filtro de
+  modalidade, o palpite óbvio era mandar `work_arrangement` na requisição —
+  seria 400, e 400 debita cota. A doc (`openwebninja.com/api/jsearch/docs`)
+  lista o que o `/search-v2` aceita: `query`, `cursor`, `num_pages`,
+  `country`, `language`, `date_posted`, **`work_from_home`**,
+  `employment_types`, `job_requirements`, `radius`,
+  `exclude_job_publishers`, `fields`. Não há filtro de modalidade — há um
+  booleano de "só remotas".
+- **Deixe a tela ter a forma que a API tem.** O filtro de modalidade nasceu com
+  quatro opções (Todas/Remoto/Híbrido/Presencial) e um comentário longo
+  explicando por que só uma delas virava parâmetro. Com duas — Remoto e
+  Presencial —, a assimetria não precisou ser administrada: **sumiu**. O
+  `modalidade.js` encolheu de dois campos que precisavam concordar (`api` e
+  `local`) para um só (`remotas`), que é ao mesmo tempo o valor de
+  `work_from_home` e o lado do corte local.
+- **Sem um "Todas", filtro tem que particionar.** "Presencial" é definido como
+  *o complemento de Remoto*, não como igualdade — senão a híbrida e a vaga sem
+  `work_arrangement` não teriam opção nenhuma que as mostrasse, e sumiriam da
+  tela em silêncio. O preço é uma híbrida aparecer rotulada "Presencial";
+  escondê-la seria pior. O teste que trava isso é o de partição: as duas
+  opções somadas devolvem a lista inteira.
+- **"Base única" era o bug.** A aba Banco de Dados não acumulava porque as duas
+  abas liam o mesmo estado `banco`, e `buscar()` o **substitui**. Buscar em
+  Porto Alegre depois de Caxias do Sul deixava só Porto Alegre — reproduzido em
+  2026-09-03: 10 linhas, depois 10 de novo, nunca 20. Corrigido separando as
+  listas: `banco` é a busca corrente, `acervo.js` é a coleção. Dois efeitos
+  colaterais morreram junto: o `setBanco([])` do caminho de erro esvaziava a
+  tela num 504, e nada reidratava do storage.
+- **Dá para oferecer uma janela que a API não tem.** "Últimos 15 dias" não
+  existe no enum do `date_posted` (all, today, 3days, week, month) — mandá-lo
+  seria 400, que debita cota. Funciona porque o `janela.js` sempre teve dois
+  portões: pede-se `month`, a janela mais estreita que **contém** 15 dias, e o
+  corte local faz o recorte real. O desenho que existia porque a API não cumpre
+  a janela prometida passou a servir para estender o que ela oferece.
+  Consequência: `valor` (tela) e `api` (requisição) viraram campos separados, e
+  quem traduz é o `apiDaJanela`. Nenhum outro módulo pode mandar a janela crua
+  para a API.
+- **Duas coisas que fazem a mesma requisição dividem a mesma chave de cache.**
+  Terceira vez que essa regra aparece: modalidade (só 'remoto' muda o pedido),
+  janela ("Último mês" e "Últimos 15 dias" mandam ambas `month`). A chave existe
+  para distinguir **requisições**, não rótulos de tela — e como `api === valor`
+  nas janelas antigas, as chaves gravadas seguem sendo achadas.
+- **Copiar a forma sem o motivo é cargo cult.** A barra da aba Vagas adia com
+  um botão "Buscar" porque cada busca custa uma das 200 do mês. O filtro do
+  acervo é local: adiar não protegeria nada. Ficou sem botão e recorta a cada
+  tecla — mesma aparência, comportamento certo (`filtroAcervo.js`).
+- **Dropdown de valor fechado sai do dado, não de uma lista canônica.** A cidade
+  da aba Vagas é a lista do IBGE porque a API exige o rótulo exato. No acervo
+  isso erraria calado: lá dentro convivem "Caxias do Sul, RS" e "Porto Alegre,
+  Rio Grande do Sul" — o `job_state` da API vem ora sigla, ora por extenso —, e
+  escolher "Porto Alegre, RS" no IBGE não acharia nada. Os seletores do acervo
+  são montados do próprio acervo. O `CampoCidade` virou reusável para isso: a
+  lista entra por prop (`cidades`), e omitida cai no IBGE — **a interação é a
+  mesma nas duas abas, a fonte é que muda**. Cada item pode ser string ou
+  `{ rotulo, nota }`; a nota sai entre parênteses na sugestão (o acervo põe a
+  contagem de vagas) e é **só exibição**: fora do índice de busca, para digitar
+  "8" não trazer as cidades com 8 vagas, e fora do `onEscolher`, para o valor
+  continuar casando com o campo `cidade` do dado. O índice do IBGE continua sendo
+  montado uma vez no módulo; a lista injetada é indexada sob demanda, porque
+  quem injeta passa dezenas de itens e não 5.571.
+- **Casar acento é filtro que erra em silêncio.** O acervo tem "Tecnico de TI" e
+  "Técnico Em TI" lado a lado, de duas buscas diferentes. Normalize com
+  `normalize('NFD').replace(/[̀-ͯ]/g,'')` antes de comparar — e
+  escreva a faixa com escapes, porque combinantes literais grudam no colchete
+  anterior em qualquer editor.
+- **Antes de desenhar filtro, conte o dado.** Salário e techs pareciam campos
+  óbvios para filtrar; medindo, 0 de 35 vagas têm salário e `techs` é sempre
+  `[]` no `mapear.js`. Dois filtros que nunca recortariam nada, evitados por
+  uma consulta ao localStorage.
+- **Separou lista? Passe no `acharVaga`.** Dividir `banco` e `acervo` quebrou a
+  página de detalhe da aba Banco de Dados na hora: `acharVaga` olhava só
+  `banco` e `vagasIa`, então clicar em "Ver detalhes" marcava a vaga como lida
+  e não abria nada — a vaga estava na tela, na frente de quem clicou. O
+  `detalhe.js` é o ponto único onde "o que a tela mostra" e "o que o detalhe
+  encontra" se reconciliam; **toda lista que vira linha na tela precisa passar
+  por ele**, ou vira página em branco. O comentário do `App.jsx` já advertia
+  disso para a `vagasIa` — e o aviso não impediu a repetição com a lista nova.
+- **Cache e acervo têm tempos de vida diferentes.** Dava para derivar o acervo
+  somando as chaves do `cota.cache`, mas o cache é descartável por natureza —
+  "Limpar cache" é a ferramenta de quem precisa de espaço. Derivado, liberar
+  espaço apagaria o histórico. Stores separados.
+- **Mesclar tem que preservar o que é do usuário.** Rebuscar traz as vagas com
+  `fav: false` e `rank: null`, porque é assim que saem do `mapear.js`.
+  Sobrescrever cegamente apagaria favorito e nota já paga, sem erro na tela.
+- **Teto no acervo não é opcional.** `localStorage` dá ~5 MB e o `gravar`
+  engole `QuotaExceededError` — sem teto, o acervo pararia de crescer em
+  silêncio. Medido: 2,7 KB/vaga, 66% disso é a `descricao`. Teto de 500 ≈ 1,3 MB.
+- **A chave de cache sem sufixo é o que salva o que já foi pago.**
+  "Presencial" não põe sufixo, então cai na mesma chave que as buscas
+  gravadas antes desta funcionalidade existir. Fosse o contrário, o primeiro
+  deploy transformaria todas as entradas do cache em órfãs — jogando fora, em
+  silêncio, requisições já debitadas das 200.
 - **Cache mascara mudanças no mapeamento.** Depois de mexer no `mapear.js`, uma
   busca repetida volta do cache **com o mapeamento antigo**. Limpe o cache na
   aba Controle ou busque outra coisa.
@@ -877,7 +969,7 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 
 ```bash
 npm run dev        # a busca e a Avaliação IA só funcionam aqui — porta 5173, caminho /vagasatalhointeligenteparati/
-npm test           # vitest — 152 testes, 11 arquivos
+npm test           # vitest — 290 testes, 16 arquivos
 npm run lint       # oxlint (não pega no-undef hoje; veja a pendência 6)
 npm run build      # gera dist/
 npm run cidades    # regenera src/data/cidades.js a partir do IBGE
