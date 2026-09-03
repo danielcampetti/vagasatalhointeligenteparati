@@ -51,6 +51,7 @@ import {
 import { lerParaMigrar, marcarMigrado } from './acervo'
 import {
   atualizarVagaRemota,
+  buscarVagaRemota,
   guardarVagasRemoto,
   lerAcervoRemoto,
 } from './acervoRemoto'
@@ -3260,6 +3261,18 @@ export default function App() {
   // a página acompanhar edições na lista (favoritar, marcar como lida).
   const [vagaAberta, setVagaAberta] = useState(null)
 
+  /**
+   * As descrições buscadas sob demanda, por id.
+   *
+   * `GET /api/acervo` não traz `descricao` — ela é 66% do peso e a tabela não
+   * a mostra. Só a página de detalhe precisa, e é uma vaga por vez, então ela
+   * busca a sua quando abre.
+   *
+   * Um mapa e não um campo na vaga: sobrescrever a lista do acervo a cada
+   * abertura faria o `filtroAcervo` e os dropdowns recalcularem à toa.
+   */
+  const [descricoes, setDescricoes] = useState({})
+
   const [menu, setMenu] = useState(null)
   const [dicaAberta, setDicaAberta] = useState(false)
   const [modalAberto, setModalAberto] = useState(false)
@@ -3339,6 +3352,20 @@ export default function App() {
     // Sem isto, destacar os botões do topo não adianta: eles abrem escondidos.
     window.scrollTo(0, 0)
     window.history.pushState({ vaga: id }, '')
+
+    // A descrição não vem na lista. Busca a desta vaga, uma vez — e falha
+    // calada de propósito: o detalhe abre sem a descrição, que é o mesmo que
+    // acontecia antes, e um aviso vermelho por um campo ausente seria pior que
+    // o campo ausente.
+    if (!descricoes[id]) {
+      buscarVagaRemota(id)
+        .then((vaga) => {
+          if (vaga?.descricao) {
+            setDescricoes((atual) => ({ ...atual, [id]: vaga.descricao }))
+          }
+        })
+        .catch((err) => console.warn('[acervo] sem descrição:', err.message))
+    }
   }
 
   function fecharVaga() {
@@ -3480,7 +3507,18 @@ export default function App() {
   // buscar pelo id a cada render evita mostrar um registro que já saiu. A
   // busca olha as duas listas — banco e Vaga Inteligente — e a ordem entre
   // elas está explicada em `detalhe.js`.
-  const detalhe = acharVaga(vagaAberta, banco, vagasIa, acervo)
+  /**
+   * A vaga aberta, completada com a descrição se ela já chegou.
+   *
+   * Não é uma quarta lista para o `acharVaga` — a vaga é a mesma, só lhe falta
+   * um campo. Ele continua sendo o ponto único que reconcilia as três listas,
+   * como o docstring dele exige.
+   */
+  const encontrada = acharVaga(vagaAberta, banco, vagasIa, acervo)
+  const detalhe =
+    encontrada && !encontrada.descricao && descricoes[encontrada.id]
+      ? { ...encontrada, descricao: descricoes[encontrada.id] }
+      : encontrada
 
   // A Vaga Inteligente não tem dropdown — o cargo dela sai do currículo, não
   // de um formulário — mas sofre do mesmo defeito e recebe o mesmo remédio na
