@@ -48,7 +48,12 @@ import {
   modalidadeDe,
   soRemotas,
 } from './modalidade'
-import { atualizarNoAcervo, guardarVagas, lerAcervo, semear } from './acervo'
+import { lerParaMigrar, marcarMigrado } from './acervo'
+import {
+  atualizarVagaRemota,
+  guardarVagasRemoto,
+  lerAcervoRemoto,
+} from './acervoRemoto'
 import { FILTRO_VAZIO, filtrarAcervo, opcoesDoAcervo } from './filtroAcervo'
 import CampoCidade from './paineis/CampoCidade'
 import { AvisoErro, Carregando } from './paineis/comuns'
@@ -1222,19 +1227,23 @@ function FiltroDoAcervo({ filtro, opcoes, onFiltro, total, mostrando }) {
 }
 
 /**
- * Os dois vazios da aba Banco de Dados.
+ * Os estados da aba Banco de Dados enquanto não há uma linha para mostrar.
  *
  * Existe separado do `SemResultados` porque as mensagens de lá falam em API e
  * em cota — "a API não devolveu resultados", "cada nova consulta consome uma
- * das 200 requisições" —, e nenhuma das duas coisas aconteceu aqui. O acervo é
- * local: um vazio dele nunca é culpa de uma requisição.
+ * das 200 requisições" —, e nenhuma das duas coisas aconteceu aqui.
  *
- * E são dois vazios diferentes, que pedem saídas opostas: com filtro, o que
- * falta é afrouxar; sem filtro, o que falta é buscar. Uma mensagem só teria de
- * mandar fazer as duas coisas, e a metade errada é a que a pessoa tentaria
- * primeiro.
+ * O acervo vive no servidor agora, então um vazio dele **pode**, sim, ser
+ * culpa de uma requisição — é exatamente o que o estado `falhou` existe para
+ * nomear, em vez de deixar a tela parecer um acervo vazio de verdade e
+ * sugerir "faça uma busca" para um problema de rede.
+ *
+ * Quando o acervo chegou (`estado === 'pronto'`) e continua vazio, ainda são
+ * dois vazios diferentes, que pedem saídas opostas: com filtro, o que falta é
+ * afrouxar; sem filtro, o que falta é buscar. Uma mensagem só teria de mandar
+ * fazer as duas coisas, e a metade errada é a que a pessoa tentaria primeiro.
  */
-function AcervoVazio({ filtrando, onLimpar }) {
+function AcervoVazio({ filtrando, onLimpar, estado, erro, onTentarDeNovo }) {
   return (
     <div
       style={{
@@ -1272,7 +1281,13 @@ function AcervoVazio({ filtrando, onLimpar }) {
       </div>
 
       <div style={{ fontSize: 15, fontWeight: 600 }}>
-        {filtrando ? 'Nenhuma vaga com este filtro' : 'O acervo ainda está vazio'}
+        {estado === 'carregando'
+          ? 'Carregando o acervo…'
+          : estado === 'falhou'
+            ? 'Não consegui carregar o acervo'
+            : filtrando
+              ? 'Nenhuma vaga com este filtro'
+              : 'O acervo ainda está vazio'}
       </div>
 
       <div
@@ -1284,7 +1299,31 @@ function AcervoVazio({ filtrando, onLimpar }) {
           lineHeight: 1.6,
         }}
       >
-        {filtrando ? (
+        {estado === 'carregando' ? (
+          <>Buscando no servidor o que já foi arquivado.</>
+        ) : estado === 'falhou' ? (
+          <>
+            {/* Dizer que falhou, e não mostrar uma tela de vazio: acervo vazio
+                por queda de rede é idêntico a acervo vazio de verdade, e o
+                conselho "faça uma busca" mandaria gastar cota à toa. */}
+            O acervo vive no servidor, e ele não respondeu. {erro}
+            <div style={{ marginTop: 12 }}>
+              <button
+                onClick={onTentarDeNovo}
+                className="bg-[#0E1729] text-[#C8D1E0] hover:bg-[#152039]"
+                style={{
+                  padding: '8px 14px',
+                  borderRadius: 9,
+                  border: '1px solid rgba(255,255,255,0.12)',
+                  fontSize: 13,
+                  cursor: 'pointer',
+                }}
+              >
+                Tentar de novo
+              </button>
+            </div>
+          </>
+        ) : filtrando ? (
           <>
             O acervo tem vagas, mas nenhuma casa com o que você pediu. Afrouxe
             os campos acima — filtrar aqui não gasta requisição, então pode
@@ -1292,8 +1331,8 @@ function AcervoVazio({ filtrando, onLimpar }) {
           </>
         ) : (
           <>
-            Tudo que a aba Vagas trouxer fica guardado aqui, através das
-            sessões. Faça uma busca por lá e as vagas aparecem neste acervo.
+            Tudo que a aba Vagas trouxer fica guardado aqui, e o acervo é
+            compartilhado: a busca de qualquer pessoa alimenta o mesmo banco.
           </>
         )}
       </div>
@@ -1672,6 +1711,7 @@ function Linha({ vaga, menuAberto, onMenu, onAbrir }) {
       </div>
 
       <div
+        title="O acervo é compartilhado: esta nota pode ter saído do currículo de outra pessoa."
         style={{
           display: 'flex',
           flexDirection: 'column',
@@ -2517,6 +2557,13 @@ function PaginaVaga({ vaga, onVoltar, cv, instrucao, onCusto, ranqueando }) {
           )}
         </div>
 
+        {vaga.rank != null && (
+          <div style={{ fontSize: 12, color: '#7C8699', marginTop: 4 }}>
+            Nota calculada contra o currículo de quem pediu a avaliação — o
+            acervo é compartilhado, então ela pode não medir o seu.
+          </div>
+        )}
+
         <div
           style={{
             display: 'grid',
@@ -3028,30 +3075,61 @@ export default function App() {
    * nunca acumulava nada. Buscar em Porto Alegre depois de Caxias do Sul
    * deixava só Porto Alegre nas duas telas.
    *
-   * O acervo agora é outro estado, com store próprio em `acervo.js`. A
-   * separação também resolve dois efeitos colaterais de graça: o
-   * `setBanco([])` do caminho de erro esvazia a busca sem encostar no
-   * histórico, e o acervo reidrata do localStorage em vez de renascer do
-   * `BANCO_DE_VAGAS`, que está vazio.
+   * O acervo agora é outro estado, que vem do servidor — ver `acervoRemoto.js`
+   * e o `useEffect` logo abaixo. A separação também resolve de graça o
+   * `setBanco([])` do caminho de erro: ele esvazia a busca sem encostar no
+   * histórico.
    */
   const [banco, setBanco] = useState(BANCO_DE_VAGAS)
 
   /**
-   * O acervo: tudo que a busca já trouxe, através das sessões.
+   * O acervo: tudo que a busca já trouxe, de quem quer que tenha buscado.
    *
-   * Inicializado por função para o localStorage ser lido uma vez só, no
-   * primeiro render, e não a cada re-render. A semeadura é a carga inicial a
-   * partir do `cota.cache` — ver `semear` em `acervo.js`; ela acontece uma
-   * vez e só na primeira, senão vaga apagada voltaria a cada recarregamento.
+   * Deixou de ser `localStorage` e passou a ser o SQLite do servidor — ver
+   * `docs/superpowers/specs/2026-09-03-acervo-compartilhado-design.md`. A
+   * consequência que atravessa esta tela é que ele **não existe no primeiro
+   * render**: precisa chegar, e pode não chegar.
    */
-  const [acervo, setAcervo] = useState(() => {
-    const guardado = lerAcervo()
-    if (guardado.semeado) return guardado.vagas
-    const doCache = Object.values(lerCota().cache ?? {}).flatMap((e) =>
-      Array.isArray(e?.vagas) ? e.vagas : [],
-    )
-    return semear(doCache).vagas
-  })
+  const [acervo, setAcervo] = useState([])
+
+  /** 'carregando' | 'pronto' | 'falhou' — ver `AcervoVazio`. */
+  const [acervoEstado, setAcervoEstado] = useState('carregando')
+  const [acervoErro, setAcervoErro] = useState('')
+  // Muda para forçar uma nova tentativa depois de uma falha.
+  const [tentativa, setTentativa] = useState(0)
+
+  useEffect(() => {
+    let vivo = true
+
+    async function carregar() {
+      setAcervoEstado('carregando')
+      try {
+        // A migração vem antes da leitura para o acervo local aparecer já na
+        // primeira tela, e não só depois de um F5.
+        const local = lerParaMigrar()
+        if (local.length) {
+          await guardarVagasRemoto(local)
+        }
+        // Marca depois da subida: falhar aqui tem que deixar a migração
+        // armada para a próxima vez, não consumi-la em silêncio.
+        marcarMigrado()
+
+        const vagas = await lerAcervoRemoto()
+        if (!vivo) return
+        setAcervo(vagas)
+        setAcervoEstado('pronto')
+      } catch (err) {
+        if (!vivo) return
+        setAcervoErro(err.message)
+        setAcervoEstado('falhou')
+      }
+    }
+
+    carregar()
+    return () => {
+      vivo = false
+    }
+  }, [tentativa])
 
   /**
    * Arquiva o que a busca trouxe e mantém o estado da tela em sincronia.
@@ -3059,10 +3137,18 @@ export default function App() {
    * Um ponto só para todos os caminhos que produzem vagas — rede, cache e
    * "Carregar mais" —, porque três chamadas espalhadas seriam três lugares
    * para esquecer de arquivar na próxima mudança.
+   *
+   * **Falhar aqui não derruba a busca.** As vagas já estão na tela: vieram da
+   * API e já custaram cota. Perder o que foi pago por causa do arquivamento
+   * seria trocar o problema grande pelo pequeno.
    */
-  function arquivar(vagas) {
+  async function arquivar(vagas) {
     if (!vagas?.length) return
-    setAcervo(guardarVagas(vagas).vagas)
+    try {
+      setAcervo(await guardarVagasRemoto(vagas))
+    } catch (err) {
+      console.warn('[acervo] não consegui arquivar:', err.message)
+    }
   }
 
   const [aba, setAba] = useState('vagas')
@@ -3759,7 +3845,7 @@ export default function App() {
       setBanco((atual) => mesclarRank(atual, ranqueadas))
       // A nota vai para o acervo junto: ela custou uma chamada à Claude, e
       // sem isto uma vaga arquivada perderia o rank ao trocar de aba.
-      setAcervo(guardarVagas(ranqueadas).vagas)
+      await arquivar(ranqueadas)
     } catch (err) {
       setErroRanking(mensagemDoErro(err))
     } finally {
@@ -3964,10 +4050,25 @@ export default function App() {
    * e saiu do menu. A função continua genérica porque a passagem pelas duas
    * listas é a parte que custa acertar, não o `fn`.
    */
-  function alterarVaga(id, fn) {
+  async function alterarVaga(id, fn) {
     setMenu(null)
     setBanco((lista) => lista.map((x) => (x.id === id ? fn(x) : x)))
-    setAcervo(atualizarNoAcervo(id, fn).vagas)
+    // Otimista: a marca aparece na hora e o servidor confirma depois. Esperar
+    // a rede para pintar uma bandeirinha faria o clique parecer engasgado.
+    setAcervo((lista) => lista.map((x) => (x.id === id ? fn(x) : x)))
+
+    const alvo = acervo.find((x) => x.id === id)
+    if (!alvo) return
+    const depois = fn(alvo)
+    try {
+      await atualizarVagaRemota(id, {
+        fav: depois.fav,
+        seen: depois.seen,
+        rank: depois.rank,
+      })
+    } catch (err) {
+      console.warn('[acervo] não consegui gravar a marca:', err.message)
+    }
   }
 
   function salvarVaga() {
@@ -4175,14 +4276,18 @@ export default function App() {
                     </div>
                   )}
   
-                  {/* Cada aba explica o próprio vazio. O do acervo nunca é
-                      culpa de uma requisição, então a mensagem que fala em API
-                      e cota mandaria mexer no lugar errado. */}
+                  {/* Cada aba explica o próprio vazio. O do acervo agora pode,
+                      sim, ser culpa de uma requisição — o estado `falhou` diz
+                      isso, em vez da mensagem de vazio que mandaria "fazer
+                      uma busca" para um problema de rede. */}
                   {total === 0 &&
                     (aba === 'banco' ? (
                       <AcervoVazio
                         filtrando={acervo.length > 0}
                         onLimpar={() => mudarFiltroAcervo(FILTRO_VAZIO)}
+                        estado={acervoEstado}
+                        erro={acervoErro}
+                        onTentarDeNovo={() => setTentativa((n) => n + 1)}
                       />
                     ) : (
                       <SemResultados
