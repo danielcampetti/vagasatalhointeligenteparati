@@ -42,42 +42,13 @@
  * mostra e o que o reranking manda para a Claude.
  */
 
+import { agora, mesclar, temId } from './vaga'
+
 export const TETO = 500
 
 const CHAVE = 'vagas:acervo'
 
 const VAZIO = { vagas: [], semeado: false }
-
-/**
- * Os campos que pertencem a quem usa o app, não à API.
- *
- * Rebuscar uma consulta traz as mesmas vagas com `fav: false` e `rank: null`,
- * porque é assim que elas saem do `mapear.js` — a API não sabe o que foi
- * favoritado nem o que a Claude pontuou. Sobrescrever cegamente apagaria as
- * duas coisas sem erro nenhum na tela.
- */
-function mesclar(velha, nova) {
-  return {
-    ...velha,
-    ...nova,
-    // Marcas de quem usa: uma vez ligadas, uma busca nova não as desliga.
-    fav: velha.fav || nova.fav || false,
-    seen: velha.seen || nova.seen || false,
-    // A nota nova vence quando existe — é o que faz reranquear valer alguma
-    // coisa. Quando não existe, a antiga fica: ela custou uma chamada paga.
-    rank: nova.rank ?? velha.rank ?? null,
-    // Resposta sem descrição não zera a que já estava guardada: sem ela, a
-    // página de detalhe fica vazia e o reranking não tem o que comparar.
-    descricao: nova.descricao || velha.descricao || '',
-    // Quando entrou no acervo, não quando foi vista de novo. É o critério de
-    // descarte do teto, e precisa ser estável.
-    entrouEm: velha.entrouEm ?? nova.entrouEm ?? agora(),
-  }
-}
-
-function agora() {
-  return new Date().toISOString()
-}
 
 /**
  * O acervo inteiro, ou vazio quando ilegível.
@@ -132,9 +103,7 @@ export function guardarVagas(novas) {
   const quando = agora()
 
   for (const nova of lista) {
-    if (!nova || nova.id === undefined || nova.id === null || nova.id === '') {
-      continue
-    }
+    if (!temId(nova)) continue
     const velha = porId.get(nova.id)
     if (velha) {
       porId.set(nova.id, mesclar(velha, nova))
