@@ -20,29 +20,41 @@ Medido hoje: `GET /api/acervo` responde 200 com a linha `prova1`, gravada ontem
 às 23:47. O volume persistiu — era a dúvida que ficou de ontem, e ela está
 respondida.
 
-Hoje teve uma investigação sem conclusão e uma correção:
+Hoje teve uma investigação, a ferramenta que a destravou, e a correção:
 
 **1. A aba Banco de Dados virou uma página inteiramente branca** no navegador do
 dono — sem menu lateral, sem mensagem. Não reproduziu em lugar nenhum: nem em
 navegador limpo, nem com 40 vagas antigas no `localStorage` para forçar a
 migração, nem em tela estreita, nem no bundle publicado, que foi conferido
 contra o `main` (hash `index-DPViLuf2.js` nos dois, compilando com
-`BASE_PATH=/`). Em janela anônima o app funcionou. **A causa segue
-desconhecida**, e está no estado daquele navegador — dado guardado ou extensão,
-que a anônima desliga juntos.
+`BASE_PATH=/`). Em janela anônima o app funcionou.
 
-**2. O limite de erro, para a próxima tela branca dizer o que é.** Um React sem
-limite desmonta a árvore inteira quando o render lança, e o que sobra é o
-`<body>` vazio: a mesma tela para erro de dado, extensão e defeito de código. O
+**2. O limite de erro, para a tela branca dizer o que é.** Um React sem limite
+desmonta a árvore inteira quando o render lança, e o que sobra é o `<body>`
+vazio: a mesma tela para erro de dado, extensão e defeito de código. O
 `LimiteDeErro` troca isso por um cartão com a mensagem escrita, o menu lateral
 vivo do lado, e a pilha de componentes no console.
 
-Testes: **404** (eram 398). Lint limpo fora do aviso pré-existente em
+**3. A causa apareceu no minuto seguinte ao deploy do limite** — e apareceu no
+meu navegador, não no do dono. `TypeError: Cannot read properties of undefined
+(reading 'map')`, em `App.jsx`: a `Linha` da tabela fazia `vaga.techs.map(...)`,
+e a vaga `prova1` — gravada ontem no volume por um `curl` de teste — não tem
+`techs`. Uma vaga sem um campo derrubava a aba inteira.
+
+O que fez isso escapar de tudo foi a **largura da janela**: abaixo do corte o
+app desenha cartões, que não mostram techs, e foi em janela estreita que as
+reproduções da manhã rodaram. "Não reproduz" era "não reproduz nesta largura".
+
+Corrigido em `Linha` com `Array.isArray`, e não com `?? []`: o acervo é público,
+aceita qualquer POST e não tem DELETE, então a tela desenha **o que está
+guardado**, não o que o `mapear.js` promete — e a vaga que a derrubava não pode
+ser apagada.
+
+Testes: **407** (eram 398). Lint limpo fora do aviso pré-existente em
 `perfil.test.js`. Build OK.
 
-**O trabalho a seguir:** reproduzir a tela branca no navegador do dono, agora
-que ela fala, e corrigir a causa. O passo é dele: abrir o app, clicar na aba e
-copiar o que o cartão mostrar.
+**O trabalho a seguir:** confirmar com o dono que a aba abre no navegador dele.
+Se ainda quebrar, agora a tela diz o quê — era esse o buraco.
 
 ---
 
@@ -87,6 +99,20 @@ console como se fosse do componente.
 assíncronos, e o React já não os trata como falha de render. Quem cuida deles
 continua sendo o `try/catch` do `carregar()` e do `arquivar()`, e o
 `ErroAcervo`.
+
+**A ferramenta pagou o próprio custo em vinte segundos.** O limite subiu para o
+Railway, abri a aba para conferir se o deploy tinha ido bem, e o defeito que
+não reproduzia a manhã inteira apareceu na minha frente — com o nome escrito no
+cartão. A diferença entre "ficou branco" e `Cannot read properties of undefined
+(reading 'map')` foi a diferença entre uma investigação de horas e um
+`grep .map(` de um minuto. O limite não foi só uma rede de proteção: foi o
+instrumento de medição que faltava.
+
+**A `Linha` passou a ser exportada, e isso é parte do conserto.** O teste de
+regressão precisa montar a linha com a vaga exata que está no volume — a
+`prova1`, sem `techs`. Sem exportar não havia como escrever esse teste, e sem o
+teste o conserto seria uma linha mudada na fé. `src/App.test.jsx` é o segundo
+arquivo de teste de componente do projeto.
 
 **Achado de lado, não corrigido: o GitHub Pages ficou com o acervo morto.**
 Medido hoje — lá o `/api/acervo` resolve para
@@ -1192,6 +1218,17 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
   comparar o bundle publicado com o do `main`, simular a migração do
   `localStorage`) para uma mensagem que estava no console do navegador do dono o
   tempo todo. O `LimiteDeErro` existe para essa mensagem chegar à tela.
+- **A largura da janela é uma variável do teste.** A tabela e os cartões são
+  dois caminhos de render diferentes, e só a tabela desenha `techs` — o defeito
+  de 04/09 vivia só nela. Todas as reproduções da manhã rodaram em janela
+  estreita, e "não reproduz" na verdade era "não reproduz nesta largura". Ao
+  tentar reproduzir defeito de tela, teste nas duas: `browser_resize` para 420 e
+  para 1200 são dois ambientes, não dois enquadramentos.
+- **A tela desenha o que está guardado, não o que o `mapear.js` promete.** O
+  `mapear.js` sempre põe `techs: []`, e isso convida a tratar o campo como
+  garantido. Não é: o `POST /api/acervo` aceita qualquer corpo, sem
+  autenticação, e o que entra fica — não há DELETE. Por isso o conserto é
+  `Array.isArray`, e não `?? []`: nulo não é a única forma de não ser lista.
 - **Janela anônima desliga duas coisas ao mesmo tempo.** Ela zera o
   `localStorage` **e** as extensões. "Funciona na anônima" prova que é estado do
   navegador e não diz qual dos dois — é um teste que não separa as hipóteses.
@@ -1220,7 +1257,7 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 
 ```bash
 npm run dev        # a busca e a Avaliação IA só funcionam aqui — porta 5173, caminho /vagasatalhointeligenteparati/
-npm test           # vitest — 404 testes, 23 arquivos
+npm test           # vitest — 407 testes, 24 arquivos
 npm run lint       # oxlint (não pega no-undef hoje; veja a pendência 6)
 npm run build      # gera dist/
 npm run cidades    # regenera src/data/cidades.js a partir do IBGE
