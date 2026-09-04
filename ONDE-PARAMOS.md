@@ -32,20 +32,27 @@ o app, e o contador antigo — no `localStorage` — media o navegador quando
 devia medir a conta. Agora quem conta é o proxy que já fazia toda requisição
 (`server.js` no Railway, `pluginServidor.js` sob `npm run dev`), pela mesma
 razão que tirou o acervo do navegador ontem: é o único lugar por onde toda
-requisição passa e que nenhuma aba fechada ou navegador diferente consegue
-burlar. Verificado por HTTP nos dois modos — sem abrir navegador, e sem gastar
-nenhuma das 200 de verdade.
+requisição passa, então buscar de outra máquina, do celular ou pelo `npm run
+dev` soma no mesmo número — e não em três contadores que se ignoram. **Não** é
+infalível: a §10 da spec registra o caso em que a contagem se perde, e ele está
+na lista de pendências abaixo.
 
-Testes: **450** (eram 407 no começo do dia). Lint limpo fora do aviso
+Testes: **451** (eram 407 no começo do dia). Lint limpo fora do aviso
 pré-existente em `perfil.test.js`. Build OK.
 
-**O trabalho a seguir é do dono, e mexe em ambiente publicado — fora deste
-worktree:** `railway variables --set CONTROLE_SEGREDO=<senha>`, o `git push`,
-e depois do deploy, um clique em "Ajustar" na aba Controle com o número que o
-painel da OpenWeb Ninja mostra — é a migração inteira, porque o contador de
-cada navegador era palpite e o número certo já tem dono. Falta também
-confirmar que a aba Banco de Dados abre no navegador dele; se ainda quebrar,
-agora a tela diz o quê.
+**Publicado e verificado em produção**, no commit `b3e09d3`. A aba Controle lê
+`0 / 200` do servidor com o ciclo aberto hoje, console limpo, e o acervo
+sobreviveu: as tabelas `cota` e `usos` entraram no mesmo volume por
+`CREATE TABLE IF NOT EXISTS`, sem passo de migração e sem tocar as vagas.
+
+**O trabalho a seguir é do dono, e são dois passos:**
+
+1. `railway variables --set CONTROLE_SEGREDO=<senha>` — **enquanto ela não
+   existe, `POST /api/cota/zerar` está aberto na URL pública.** O log da subida
+   anuncia isso, mas a rota está viva.
+2. Abrir Controle → "Ajustar" → o número do painel da OpenWeb Ninja. É a
+   migração inteira: o contador de cada navegador era palpite, e somar dois
+   palpites daria um número pior que o do provedor.
 
 ---
 
@@ -125,13 +132,48 @@ dev e Railway se comportarem igual, medida de novo, desta vez na cota. Os dois
 bancos de teste (o `acervo.db` que o dev cria por padrão e o arquivo em
 `%TEMP%` da produção local) foram apagados depois.
 
-Testes: **450** (eram 407 antes desta entrada — 24 arquivos viraram 27). Lint
+Testes: **451** (eram 407 antes desta entrada — 24 arquivos viraram 27). Lint
 limpo fora do aviso pré-existente em `perfil.test.js`. Build OK.
 
-**O que fica para o dono, fora deste worktree — o README já documenta a
-variável:** `railway variables --set CONTROLE_SEGREDO=<senha>`, o `git push
-origin main`, e depois do deploy um clique em "Ajustar" na aba Controle com o
-número que o painel da OpenWeb Ninja mostra.
+### Como foi executado, e o que a revisão da branch inteira pegou
+
+Oito tarefas, cada uma com implementador próprio e revisão própria, num
+worktree isolado — o `main` só foi tocado no fim, porque ele faz deploy
+automático e commits intermediários poriam no ar um app pela metade.
+
+**Cinco correções foram a defeitos do plano, não do trabalho.** Vale registrar
+porque o padrão se repete: quem escreve o plano não roda o código, e por isso
+erra em coisas que só aparecem ao executar. O `app.test.js` não tinha o harness
+de servidor que dois testes meus assumiam; os *call sites* do `criarApp` eram
+três e não um (o terceiro nasceu de outra tarefa do mesmo plano); a restrição
+de não marcar a Claude forçava um `if` assimétrico dentro de uma função que é
+destino-agnóstica por desenho, quando o outro caminho de erro dela já marcava
+os dois; o `dev.test.js` estava listado como arquivo de teste da tarefa sem que
+nenhum passo dissesse o que escrever nele; e o `aviso()` que prescrevi
+escrevia num estado que o painel só renderiza quando tudo falhou, o que
+tornaria um 403 de senha errada **invisível** — "apertei Zerar e não aconteceu
+nada" faria o dono concluir que zerou.
+
+**Dois achados valem mais que o resto**, e os dois vieram de `grep`, não de
+teste. O `paginaNoCache` lia `cota.cache?.[chave]`: depois da divisão do
+estado, `cota` é o objeto do servidor e não tem `cache`, então o
+*optional chaining* devolveria `undefined` em silêncio e "Carregar mais" iria à
+rede buscar uma página **já paga**. E o teste escrito para travar a regra
+central do plano — falha nunca vira `0 / 200` — **não conseguia falhar**: ele
+procurava `'0 / 200'`, uma string que o painel nunca produz, porque o número e
+o rótulo são dois `<span>` irmãos sem espaço (`textContent` sai `0/ 200`).
+Apagando a proteção, o teste seguia verde. É a regra de 03/09 outra vez: um
+teste que você nunca viu falhar não é um teste — e desta vez ela pegou uma
+asserção que **eu** escrevi.
+
+### Publicado
+
+Mesclado no `main` e publicado no commit `b3e09d3`. Verificado em produção:
+`0 / 200` vindo do servidor, console limpo, acervo intacto. Antes disso,
+verificado localmente com os olhos e não só com testes — painel lendo 47/200 do
+servidor; com o servidor morto, "Não consegui ler a cota" e **nenhum número**;
+busca repetida servida do cache com **zero** requisições e contador da conta
+parado; e uma requisição real sem chave devolvendo 500 sem contar.
 
 ---
 
@@ -889,6 +931,30 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 
 ## Pendências acumuladas
 
+**Abertas em 04/09, e as três são decisão do dono — não foram feitas de
+propósito:**
+
+- **A contagem se perde quando a aba fecha no meio da resposta.** O
+  `res.on('finish')` não dispara num socket que morreu, e o `fetch` do
+  `reproxiar` não está amarrado à conexão do navegador: a chamada à JSearch já
+  saiu e a conta já foi cobrada, mas o contador não anda. Quem busca e fecha a
+  aba em dois segundos gasta uma das 200 sem registro. **Não é regressão** — o
+  contador antigo perdia a mesma requisição e mais —, mas a spec e este arquivo
+  chegaram a prometer o contrário, e as duas frases foram corrigidas. O
+  conserto não é de graça: `res.on('close')` sempre dispara, inclusive num
+  abort *antes* de o upstream ser chamado e antes de o marcador `sem-chave` ser
+  posto, então contaria requisições que talvez nem tenham saído e quebraria a
+  distinção da §6 da spec. Decidir isso é escolher qual erro se prefere.
+- **O botão "Zerar contagem" não pede confirmação.** Num servidor sem
+  `CONTROLE_SEGREDO`, é um clique de distância de um estrago que ninguém
+  desfaz. A spec não pede confirmação e por isso ela não foi feita; com o
+  segredo posto, o risco cai para "quem tem a senha erra o clique".
+- **`CONTROLE_SEGREDO` ainda não está no Railway.** Enquanto não estiver,
+  `POST /api/cota/zerar` responde a qualquer um que alcance a URL pública. O
+  servidor anuncia no log da subida (`[controle] SEM CONTROLE_SEGREDO`), no
+  mesmo lugar e pela mesma razão que o `BANCO_CAMINHO` já anunciava — é a falha
+  que não dá sintoma nenhum na tela.
+
 **Fechadas desde a revisão anterior** (eram as pendências 3, 4, 5 e 8):
 
 - **3. Comparação currículo × vaga**, para preencher o Rank IA. Implementada em
@@ -1251,7 +1317,33 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
   'function'` para provar "importar não abre porta" — passaria intacto com o
   defeito de volta. Na segunda, o conserto provava por `bind` e **também**
   passava com o defeito presente. A regra que ficou: reintroduza o defeito, veja
-  o teste falhar, só então desfaça.
+  o teste falhar, só então desfaça. **Terceira vez em 04/09**, e a mais
+  sorrateira: a asserção era `not.toContain('0 / 200')` — uma string que a tela
+  **nunca** produz, porque o número e o rótulo são dois `<span>` irmãos sem
+  `{' '}` entre eles e o `textContent` sai `0/ 200`. Não havia defeito no
+  componente; o defeito era a asserção, e ela passava com a proteção apagada.
+- **Asserção de string sobre número renderizado é frágil por causa do JSX.**
+  Elementos irmãos não ganham espaço no `textContent`; `{a}{b}` vira `"ab"`.
+  Procure o rótulo inteiro que só existe no ramo que você quer travar (`'/ 200
+  requisições'`), ou case um **nó-folha** cujo texto aparado seja exatamente o
+  esperado — que foi como a coluna de status virou testável sem casar com o
+  `200` do rótulo do cartão.
+- **Quem escreve o plano não roda o código, e por isso o plano erra.** Das
+  correções desta execução, **cinco** foram a defeitos do plano e não do
+  trabalho: um harness de teste que não existia, um terceiro *call site* que
+  outra tarefa do mesmo plano criou, uma restrição que forçava assimetria numa
+  função agnóstica, um arquivo de teste listado sem passo que o preenchesse, e
+  um aviso escrito num estado que a tela não renderiza. Nenhuma delas apareceu
+  na leitura do plano; todas apareceram ao executar. Planejar em detalhe
+  continua valendo — mas quem executa tem que poder contradizer o plano, e o
+  contraditório precisa ser registrado, não engolido.
+- **Depois de dividir um estado em dois, `grep` os campos, não confie nos
+  testes.** Ao separar a cota (servidor) do cache (navegador), sobrou um
+  `cota.cache?.[chave]` lendo um campo que mudou de dono: o *optional chaining*
+  devolvia `undefined` calado e "Carregar mais" ia à rede buscar página **já
+  paga**. Sem erro, sem lint, sem teste vermelho. `grep -n "estado\."` e preste
+  contas de cada ocorrência — é o mesmo remédio do "renomeou função? procure os
+  chamadores", para campos.
 - **Prova de porta por `bind` não vale no Windows.** `listen(PORTA)` sem host
   liga no wildcard `::`; um `bind` específico em `127.0.0.1` por cima disso é
   **permitido** no Windows (sem `SO_EXCLUSIVEADDRUSE`), então não dá
@@ -1336,7 +1428,7 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 
 ```bash
 npm run dev        # a busca e a Avaliação IA só funcionam aqui — porta 5173, caminho /vagasatalhointeligenteparati/
-npm test           # vitest — 450 testes, 27 arquivos
+npm test           # vitest — 451 testes, 27 arquivos
 npm run lint       # oxlint (não pega no-undef hoje; veja a pendência 6)
 npm run build      # gera dist/
 npm run cidades    # regenera src/data/cidades.js a partir do IBGE
