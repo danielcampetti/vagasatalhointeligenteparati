@@ -155,8 +155,12 @@ describe('a contagem roda no npm run dev', () => {
 
     await fetch(`${baseIsolado}/api/jsearch/search-v2?query=TI`)
 
-    // A contagem acontece no listener de 'finish' da resposta, que já
-    // aconteceu quando o fetch acima resolveu — sem precisar de espera extra.
+    // O `fetch` resolve quando os headers chegam, não quando o `finish` do
+    // servidor roda — a mesma corrida que o `contagem.test.js` já documenta
+    // e evita com este tick. Aqui o corpo é o fallback de HTML da SPA (leitura
+    // de arquivo e transformação), mais pesado que o `res.json` trivial de
+    // lá, então a corrida é pelo menos tão real quanto.
+    await new Promise((ok) => setImmediate(ok))
     expect(cota.ler().rede).toBe(1)
   })
 })
