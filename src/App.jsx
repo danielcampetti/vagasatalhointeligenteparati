@@ -57,6 +57,7 @@ import {
 } from './acervoRemoto'
 import { marcasMudadas } from './vaga'
 import { FILTRO_VAZIO, filtrarAcervo, opcoesDoAcervo } from './filtroAcervo'
+import { LimiteDeErro } from './LimiteDeErro'
 import CampoCidade from './paineis/CampoCidade'
 import { AvisoErro, AvisoRessalva, Carregando } from './paineis/comuns'
 import PainelIA from './paineis/PainelIA'
@@ -4201,317 +4202,332 @@ export default function App() {
           padding: '22px 26px 30px',
         }}
       >
-        <Cabecalho aba={aba} />
+        {/* O limite do render, e a `key` que o faz esquecer.
 
-        {/* A página de detalhe ocupa o lugar da tabela e do bloco de consulta:
-            é uma tela, não um painel dentro da listagem. */}
-        {abreDetalhe && detalhe && (
-          <PaginaVaga
-            vaga={detalhe}
-            onVoltar={fecharVaga}
-            cv={cv}
-            instrucao={instrucao}
-            onCusto={() => setCusto(lerCusto())}
-            // Cada aba tem o seu estado de ranking, e a página aberta a
-            // partir da Vaga Inteligente tem que olhar o dela — passar só
-            // `ranqueando` faria o rótulo do Rank IA ler o estado da aba
-            // errada.
-            ranqueando={aba === 'inteligente' ? ranqueandoIa : ranqueando}
-          />
-        )}
+            Fica **dentro** do `<main>` de propósito: o que quebra aqui não
+            leva o menu lateral junto, e é o menu que dá a saída. Em
+            04/09/2026 a aba Banco de Dados desmontou a árvore inteira e a
+            página ficou branca — sem menu, o único caminho era o F5, e o F5
+            perde a busca corrente, que custou uma das 200 do mês.
 
-        {ehTabela && !detalhe && (
-          <div>
-            {aba === 'banco' && (
-              <FiltroDoAcervo
-                filtro={filtroAcervo}
-                opcoes={opcoesAcervo}
-                onFiltro={mudarFiltroAcervo}
-                total={acervo.length}
-                mostrando={acervoFiltrado.length}
-              />
-            )}
+            A `key` é o mecanismo do esquecimento: o React não desfaz o
+            estado de erro sozinho, então sem ela a aba que quebrasse
+            deixaria o cartão de erro na tela para sempre. Trocando a chave,
+            o limite é remontado, e um limite remontado nasce sem erro —
+            trocar de aba passa a ser, sozinho, o conserto. */}
+        <LimiteDeErro key={aba}>
+          <Cabecalho aba={aba} />
 
-            {aba === 'vagas' && (
-              <ConsultaDestaque
-                cargo={cargoRascunho}
-                cidade={cidadeRascunho}
-                janela={janelaRascunho}
-                modalidade={modalidadeRascunho}
-                onCargo={(e) => setCargoRascunho(e.target.value)}
-                // O combobox entrega o rótulo já escolhido da lista, não um
-                // evento: não há texto digitado virando valor.
-                onCidade={setCidadeRascunho}
-                onJanela={setJanelaRascunho}
-                onModalidade={setModalidadeRascunho}
-                onBuscar={buscar}
-                pendente={consultaPendente}
-                buscando={buscando}
-                ranqueando={ranqueando}
-              />
-            )}
+          {/* A página de detalhe ocupa o lugar da tabela e do bloco de consulta:
+              é uma tela, não um painel dentro da listagem. */}
+          {abreDetalhe && detalhe && (
+            <PaginaVaga
+              vaga={detalhe}
+              onVoltar={fecharVaga}
+              cv={cv}
+              instrucao={instrucao}
+              onCusto={() => setCusto(lerCusto())}
+              // Cada aba tem o seu estado de ranking, e a página aberta a
+              // partir da Vaga Inteligente tem que olhar o dela — passar só
+              // `ranqueando` faria o rótulo do Rank IA ler o estado da aba
+              // errada.
+              ranqueando={aba === 'inteligente' ? ranqueandoIa : ranqueando}
+            />
+          )}
 
-            {aba === 'vagas' && erroBusca && <AvisoErro texto={erroBusca} />}
-            {aba === 'vagas' && erroRanking && <AvisoErro texto={erroRanking} />}
-
-            {/* Perto dos resultados, porque é sobre eles: vieram, valem, e não
-                entraram no acervo compartilhado. A busca não falhou — por isso
-                é ressalva em âmbar e não erro em vermelho. */}
-            {aba === 'vagas' && avisoArquivo && (
-              <AvisoRessalva
-                texto={`As vagas apareceram, mas não foram para o acervo compartilhado: ${avisoArquivo} Elas continuam nesta tela; quem abrir a aba Banco de Dados não vai encontrá-las.`}
-                onDispensar={() => setAvisoArquivo('')}
-              />
-            )}
-
-            {faseVagas ? (
-              <div
-                style={{
-                  border: '1px solid rgba(255,255,255,0.06)',
-                  background: '#0B1220',
-                  borderRadius: 12,
-                }}
-              >
-                <Carregando
-                  texto={faseVagas.texto}
-                  detalhe={faseVagas.detalhe}
+          {ehTabela && !detalhe && (
+            <div>
+              {aba === 'banco' && (
+                <FiltroDoAcervo
+                  filtro={filtroAcervo}
+                  opcoes={opcoesAcervo}
+                  onFiltro={mudarFiltroAcervo}
+                  total={acervo.length}
+                  mostrando={acervoFiltrado.length}
                 />
-              </div>
-            ) : !mostrarResultados ? (
-              <EsperaBusca />
-            ) : (
-              <>
-                {/* Com zero resultados quem fala é o bloco "Nenhuma vaga
-                    encontrada" logo abaixo; a contagem seria redundante. */}
-                {aba === 'vagas' && total > 0 && (
-                  <div
-                    style={{ fontSize: 13, color: '#8A94A6', marginBottom: 12 }}
-                  >
-                    <strong style={{ color: '#E8ECF4', fontWeight: 600 }}>
-                      {total}
-                    </strong>{' '}
-                    {total === 1 ? 'vaga encontrada' : 'vagas encontradas'}
-                    {cargo || cidade
-                      ? ` para “${[cargo, cidade].filter(Boolean).join(' em ')}”`
-                      : null}
-                    {/* A conta tem que fechar: sem isto, uma busca que trouxe
-                        dez vagas e mostrou três pareceria a API devolvendo
-                        menos do que devolveu. */}
-                    {ocultadasPeloRecorte > 0 && (
-                      <>
-                        {' · '}
-                        {ocultadasPeloRecorte}{' '}
-                        {ocultadasPeloRecorte === 1 ? 'oculta' : 'ocultas'} fora
-                        de {rotulosDoRecorte.map((r) => `“${r}”`).join(' e ')}
-                      </>
-                    )}
-                  </div>
-                )}
+              )}
 
+              {aba === 'vagas' && (
+                <ConsultaDestaque
+                  cargo={cargoRascunho}
+                  cidade={cidadeRascunho}
+                  janela={janelaRascunho}
+                  modalidade={modalidadeRascunho}
+                  onCargo={(e) => setCargoRascunho(e.target.value)}
+                  // O combobox entrega o rótulo já escolhido da lista, não um
+                  // evento: não há texto digitado virando valor.
+                  onCidade={setCidadeRascunho}
+                  onJanela={setJanelaRascunho}
+                  onModalidade={setModalidadeRascunho}
+                  onBuscar={buscar}
+                  pendente={consultaPendente}
+                  buscando={buscando}
+                  ranqueando={ranqueando}
+                />
+              )}
+
+              {aba === 'vagas' && erroBusca && <AvisoErro texto={erroBusca} />}
+              {aba === 'vagas' && erroRanking && <AvisoErro texto={erroRanking} />}
+
+              {/* Perto dos resultados, porque é sobre eles: vieram, valem, e não
+                  entraram no acervo compartilhado. A busca não falhou — por isso
+                  é ressalva em âmbar e não erro em vermelho. */}
+              {aba === 'vagas' && avisoArquivo && (
+                <AvisoRessalva
+                  texto={`As vagas apareceram, mas não foram para o acervo compartilhado: ${avisoArquivo} Elas continuam nesta tela; quem abrir a aba Banco de Dados não vai encontrá-las.`}
+                  onDispensar={() => setAvisoArquivo('')}
+                />
+              )}
+
+              {faseVagas ? (
                 <div
                   style={{
                     border: '1px solid rgba(255,255,255,0.06)',
                     background: '#0B1220',
                     borderRadius: 12,
-                    overflow: 'hidden',
                   }}
                 >
-                  {!estreito && total > 0 && (
-                    <div style={{ overflowX: 'auto' }}>
-                      <CabecalhoTabela
-                        ordem={ordem}
-                        direcao={direcao}
-                        onOrdenar={ordenarPor}
-                        dicaAberta={dicaAberta}
-                        onDica={setDicaAberta}
-                      />
-                      {visiveis.map((vaga) => (
-                        <Linha
-                          key={vaga.id}
-                          vaga={vaga}
-                          menuAberto={menu === vaga.id}
-                          onMenu={(e) => {
-                            e.stopPropagation()
-                            setMenu((atual) => (atual === vaga.id ? null : vaga.id))
-                          }}
-                          // Chega por três caminhos: o clique na linha inteira,
-                          // o item "Ver detalhes" do menu, e o título — os
-                          // dois primeiros com evento, o título sem, porque
-                          // ele já parou a propagação por conta própria. Daí o
-                          // `?.`: sem ele o caminho do título lançaria.
-                          onAbrir={(e) => {
-                            e?.stopPropagation()
-                            abrirVaga(vaga.id)
-                          }}
-                        />
-                      ))}
-                    </div>
-                  )}
-  
-                  {estreito && total > 0 && (
-                    <div style={{ display: 'flex', flexDirection: 'column' }}>
-                      {visiveis.map((vaga) => (
-                        <Card
-                          key={vaga.id}
-                          vaga={vaga}
-                          onAbrir={() => abrirVaga(vaga.id)}
-                        />
-                      ))}
-                    </div>
-                  )}
-  
-                  {/* Cada aba explica o próprio vazio. O do acervo agora pode,
-                      sim, ser culpa de uma requisição — o estado `falhou` diz
-                      isso, em vez da mensagem de vazio que mandaria "fazer
-                      uma busca" para um problema de rede. */}
-                  {total === 0 &&
-                    (aba === 'banco' ? (
-                      <AcervoVazio
-                        filtrando={acervo.length > 0}
-                        onLimpar={() => mudarFiltroAcervo(FILTRO_VAZIO)}
-                        estado={acervoEstado}
-                        erro={acervoErro}
-                        onTentarDeNovo={() => setTentativa((n) => n + 1)}
-                      />
-                    ) : (
-                      <SemResultados
-                        cidade={cidade}
-                        ocultadas={aba === 'vagas' ? ocultadasPeloRecorte : 0}
-                        rotulos={rotulosDoRecorte}
-                      />
-                    ))}
-  
-                  <Paginacao
-                    total={total}
-                    inicio={inicio}
-                    porPagina={porPagina}
-                    pagina={paginaAtual}
-                    maxPagina={maxPagina}
-                    onPagina={setPagina}
-                    onPorPagina={(e) => {
-                      setPorPagina(parseInt(e.target.value, 10))
-                      setPagina(1)
-                    }}
+                  <Carregando
+                    texto={faseVagas.texto}
+                    detalhe={faseVagas.detalhe}
                   />
                 </div>
+              ) : !mostrarResultados ? (
+                <EsperaBusca />
+              ) : (
+                <>
+                  {/* Com zero resultados quem fala é o bloco "Nenhuma vaga
+                      encontrada" logo abaixo; a contagem seria redundante. */}
+                  {aba === 'vagas' && total > 0 && (
+                    <div
+                      style={{ fontSize: 13, color: '#8A94A6', marginBottom: 12 }}
+                    >
+                      <strong style={{ color: '#E8ECF4', fontWeight: 600 }}>
+                        {total}
+                      </strong>{' '}
+                      {total === 1 ? 'vaga encontrada' : 'vagas encontradas'}
+                      {cargo || cidade
+                        ? ` para “${[cargo, cidade].filter(Boolean).join(' em ')}”`
+                        : null}
+                      {/* A conta tem que fechar: sem isto, uma busca que trouxe
+                          dez vagas e mostrou três pareceria a API devolvendo
+                          menos do que devolveu. */}
+                      {ocultadasPeloRecorte > 0 && (
+                        <>
+                          {' · '}
+                          {ocultadasPeloRecorte}{' '}
+                          {ocultadasPeloRecorte === 1 ? 'oculta' : 'ocultas'} fora
+                          de {rotulosDoRecorte.map((r) => `“${r}”`).join(' e ')}
+                        </>
+                      )}
+                    </div>
+                  )}
 
-                {/* Só na aba Vagas, e só enquanto houver próxima página. Sem
-                    cursor o botão desaparece em vez de ficar clicável e
-                    inerte: "acabaram as vagas" é informação, botão morto não.
-                    O custo vai escrito no próprio botão — ele gasta a cota
-                    escassa, e nenhum clique aqui deve ser surpresa. */}
-                {aba === 'vagas' && (cursor || paginaNoCache) && (
                   <div
                     style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      gap: 7,
-                      marginTop: 18,
+                      border: '1px solid rgba(255,255,255,0.06)',
+                      background: '#0B1220',
+                      borderRadius: 12,
+                      overflow: 'hidden',
                     }}
                   >
-                    <button
-                      onClick={carregarMais}
-                      disabled={carregandoMais || ranqueando || buscando}
-                      className={
-                        carregandoMais || ranqueando || buscando
-                          ? 'bg-[#1A2438] text-[#7C8699]'
-                          : 'bg-white/[0.05] text-[#D3DAE6] hover:bg-white/[0.09] hover:text-[#E8ECF4]'
-                      }
+                    {!estreito && total > 0 && (
+                      <div style={{ overflowX: 'auto' }}>
+                        <CabecalhoTabela
+                          ordem={ordem}
+                          direcao={direcao}
+                          onOrdenar={ordenarPor}
+                          dicaAberta={dicaAberta}
+                          onDica={setDicaAberta}
+                        />
+                        {visiveis.map((vaga) => (
+                          <Linha
+                            key={vaga.id}
+                            vaga={vaga}
+                            menuAberto={menu === vaga.id}
+                            onMenu={(e) => {
+                              e.stopPropagation()
+                              setMenu((atual) => (atual === vaga.id ? null : vaga.id))
+                            }}
+                            // Chega por três caminhos: o clique na linha inteira,
+                            // o item "Ver detalhes" do menu, e o título — os
+                            // dois primeiros com evento, o título sem, porque
+                            // ele já parou a propagação por conta própria. Daí o
+                            // `?.`: sem ele o caminho do título lançaria.
+                            onAbrir={(e) => {
+                              e?.stopPropagation()
+                              abrirVaga(vaga.id)
+                            }}
+                          />
+                        ))}
+                      </div>
+                    )}
+  
+                    {estreito && total > 0 && (
+                      <div style={{ display: 'flex', flexDirection: 'column' }}>
+                        {visiveis.map((vaga) => (
+                          <Card
+                            key={vaga.id}
+                            vaga={vaga}
+                            onAbrir={() => abrirVaga(vaga.id)}
+                          />
+                        ))}
+                      </div>
+                    )}
+  
+                    {/* Cada aba explica o próprio vazio. O do acervo agora pode,
+                        sim, ser culpa de uma requisição — o estado `falhou` diz
+                        isso, em vez da mensagem de vazio que mandaria "fazer
+                        uma busca" para um problema de rede. */}
+                    {total === 0 &&
+                      (aba === 'banco' ? (
+                        <AcervoVazio
+                          filtrando={acervo.length > 0}
+                          onLimpar={() => mudarFiltroAcervo(FILTRO_VAZIO)}
+                          estado={acervoEstado}
+                          erro={acervoErro}
+                          onTentarDeNovo={() => setTentativa((n) => n + 1)}
+                        />
+                      ) : (
+                        <SemResultados
+                          cidade={cidade}
+                          ocultadas={aba === 'vagas' ? ocultadasPeloRecorte : 0}
+                          rotulos={rotulosDoRecorte}
+                        />
+                      ))}
+  
+                    <Paginacao
+                      total={total}
+                      inicio={inicio}
+                      porPagina={porPagina}
+                      pagina={paginaAtual}
+                      maxPagina={maxPagina}
+                      onPagina={setPagina}
+                      onPorPagina={(e) => {
+                        setPorPagina(parseInt(e.target.value, 10))
+                        setPagina(1)
+                      }}
+                    />
+                  </div>
+
+                  {/* Só na aba Vagas, e só enquanto houver próxima página. Sem
+                      cursor o botão desaparece em vez de ficar clicável e
+                      inerte: "acabaram as vagas" é informação, botão morto não.
+                      O custo vai escrito no próprio botão — ele gasta a cota
+                      escassa, e nenhum clique aqui deve ser surpresa. */}
+                  {aba === 'vagas' && (cursor || paginaNoCache) && (
+                    <div
                       style={{
                         display: 'flex',
+                        flexDirection: 'column',
                         alignItems: 'center',
-                        gap: 9,
-                        padding: '11px 20px',
-                        borderRadius: 10,
-                        border: '1px solid rgba(255,255,255,0.1)',
-                        fontSize: 13.5,
-                        fontWeight: 600,
-                        cursor:
-                          carregandoMais || ranqueando || buscando
-                            ? 'default'
-                            : 'pointer',
+                        gap: 7,
+                        marginTop: 18,
                       }}
                     >
-                      {carregandoMais
-                        ? 'Buscando mais vagas...'
-                        : ranqueando
-                          ? 'Avaliando com a IA...'
-                          : 'Carregar mais vagas'}
-                    </button>
-                    <div style={{ fontSize: 12, color: '#7C8699' }}>
-                      {paginaNoCache
-                        ? 'Esta página já foi baixada antes: sai do cache, sem consumir requisição.'
-                        : 'Consome 1 das 200 requisições do mês e avalia com a IA só as vagas novas (~US$ 0,03).'}
+                      <button
+                        onClick={carregarMais}
+                        disabled={carregandoMais || ranqueando || buscando}
+                        className={
+                          carregandoMais || ranqueando || buscando
+                            ? 'bg-[#1A2438] text-[#7C8699]'
+                            : 'bg-white/[0.05] text-[#D3DAE6] hover:bg-white/[0.09] hover:text-[#E8ECF4]'
+                        }
+                        style={{
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 9,
+                          padding: '11px 20px',
+                          borderRadius: 10,
+                          border: '1px solid rgba(255,255,255,0.1)',
+                          fontSize: 13.5,
+                          fontWeight: 600,
+                          cursor:
+                            carregandoMais || ranqueando || buscando
+                              ? 'default'
+                              : 'pointer',
+                        }}
+                      >
+                        {carregandoMais
+                          ? 'Buscando mais vagas...'
+                          : ranqueando
+                            ? 'Avaliando com a IA...'
+                            : 'Carregar mais vagas'}
+                      </button>
+                      <div style={{ fontSize: 12, color: '#7C8699' }}>
+                        {paginaNoCache
+                          ? 'Esta página já foi baixada antes: sai do cache, sem consumir requisição.'
+                          : 'Consome 1 das 200 requisições do mês e avalia com a IA só as vagas novas (~US$ 0,03).'}
+                      </div>
                     </div>
-                  </div>
-                )}
-              </>
-            )}
-          </div>
-        )}
+                  )}
+                </>
+              )}
+            </div>
+          )}
 
-        {aba === 'ia' && (
-          <PainelIA
-            cv={cv}
-            onCv={setCv}
-            arrastando={arrastando}
-            onArrastarSobre={(e) => {
-              e.preventDefault()
-              if (!arrastando) setArrastando(true)
-            }}
-            onArrastarSair={() => setArrastando(false)}
-            onRemoverCv={() => setCv(null)}
-            instrucao={instrucao}
-            onInstrucao={(e) => {
-              // `definirInstrucao` só grava se já houver currículo em
-              // `vagas:cv` (ver curriculo.js) — editar a instrução antes de
-              // enviar um currículo não persiste. Aceitável: a instrução só
-              // importa quando há currículo para ranquear com ela.
-              setInstrucao(e.target.value)
-              definirInstrucao(e.target.value)
-            }}
-            onRestaurar={() => {
-              setInstrucao(INSTRUCAO_PADRAO)
-              definirInstrucao(INSTRUCAO_PADRAO)
-            }}
-            onCusto={() => setCusto(lerCusto())}
-          />
-        )}
+          {aba === 'ia' && (
+            <PainelIA
+              cv={cv}
+              onCv={setCv}
+              arrastando={arrastando}
+              onArrastarSobre={(e) => {
+                e.preventDefault()
+                if (!arrastando) setArrastando(true)
+              }}
+              onArrastarSair={() => setArrastando(false)}
+              onRemoverCv={() => setCv(null)}
+              instrucao={instrucao}
+              onInstrucao={(e) => {
+                // `definirInstrucao` só grava se já houver currículo em
+                // `vagas:cv` (ver curriculo.js) — editar a instrução antes de
+                // enviar um currículo não persiste. Aceitável: a instrução só
+                // importa quando há currículo para ranquear com ela.
+                setInstrucao(e.target.value)
+                definirInstrucao(e.target.value)
+              }}
+              onRestaurar={() => {
+                setInstrucao(INSTRUCAO_PADRAO)
+                definirInstrucao(INSTRUCAO_PADRAO)
+              }}
+              onCusto={() => setCusto(lerCusto())}
+            />
+          )}
 
-        {/* `!detalhe` pelo mesmo motivo da tabela acima: a página de detalhe
-            é uma tela, não um painel dentro da listagem. Sem isto o painel
-            inteiro — currículo, cidade, botão de busca — ficaria empilhado
-            embaixo do detalhe da vaga. */}
-        {aba === 'inteligente' && !detalhe && (
-          <PainelVagaInteligente
-            cv={cv}
-            cidade={cidadeIa}
-            onCidade={(valor) => {
-              setCidadeIa(valor)
-              setBuscaIaFeita(false)
-            }}
-            buscando={buscandoIa}
-            ranqueando={ranqueandoIa}
-            buscaFeita={buscaIaFeita}
-            vagas={vagasIaVisiveis}
-            erro={erroIa}
-            onBuscar={buscarInteligente}
-            onAbrirVaga={abrirVaga}
-            onIrParaCurriculo={() => irParaAba('ia')}
-          />
-        )}
+          {/* `!detalhe` pelo mesmo motivo da tabela acima: a página de detalhe
+              é uma tela, não um painel dentro da listagem. Sem isto o painel
+              inteiro — currículo, cidade, botão de busca — ficaria empilhado
+              embaixo do detalhe da vaga. */}
+          {aba === 'inteligente' && !detalhe && (
+            <PainelVagaInteligente
+              cv={cv}
+              cidade={cidadeIa}
+              onCidade={(valor) => {
+                setCidadeIa(valor)
+                setBuscaIaFeita(false)
+              }}
+              buscando={buscandoIa}
+              ranqueando={ranqueandoIa}
+              buscaFeita={buscaIaFeita}
+              vagas={vagasIaVisiveis}
+              erro={erroIa}
+              onBuscar={buscarInteligente}
+              onAbrirVaga={abrirVaga}
+              onIrParaCurriculo={() => irParaAba('ia')}
+            />
+          )}
 
-        {aba === 'controle' && (
-          <PainelControle
-            cota={cota}
-            onZerar={() => setCota(zerarContagem())}
-            onAjustar={(gastas) => setCota(ajustarContagem(gastas))}
-            onLimparCache={() => setCota(limparCache())}
-            custo={custo}
-            onZerarCusto={() => setCusto(zerarCusto())}
-          />
-        )}
+          {aba === 'controle' && (
+            <PainelControle
+              cota={cota}
+              onZerar={() => setCota(zerarContagem())}
+              onAjustar={(gastas) => setCota(ajustarContagem(gastas))}
+              onLimparCache={() => setCota(limparCache())}
+              custo={custo}
+              onZerarCusto={() => setCusto(zerarCusto())}
+            />
+          )}
+        </LimiteDeErro>
       </main>
 
       {modalAberto && (
