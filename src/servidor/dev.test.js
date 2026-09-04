@@ -23,6 +23,8 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from 'vitest'
+import { abrirBanco, criarCota } from './banco.js'
+import { pluginServidor } from './pluginServidor.js'
 
 let dev
 let base
@@ -82,5 +84,79 @@ describe('o acervo existe no npm run dev', () => {
     const fantasma = await fetch(`${base}/api/acervo/fantasma`)
     expect(fantasma.status).toBe(404)
     expect((await fantasma.json()).message).toMatch(/não/i)
+  })
+})
+
+describe('a cota existe no npm run dev', () => {
+  /**
+   * O gate contra o `Router`.
+   *
+   * `rotasCota.js` documenta que `criarRotasCota` precisa devolver um app do
+   * express, e não um `Router`: a pilha connect do vite entrega um
+   * `http.ServerResponse` cru, sem `res.json` nem `res.status` — só o
+   * `init` que todo app do express roda instala esses métodos. Um `Router`
+   * aqui continua verde em `rotasCota.test.js` e em `app.test.js`, porque os
+   * dois montam a rota dentro de um `express()` de verdade; só a pilha
+   * connect do vite expõe a diferença, e só este arquivo passa por ela.
+   */
+  test('GET /api/cota responde JSON pelo dev server, não index.html nem 404', async () => {
+    const res = await fetch(`${base}/api/cota`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toMatch(/application\/json/)
+    expect((await res.json()).rede).toBe(0)
+  })
+})
+
+describe('a contagem roda no npm run dev', () => {
+  let devIsolado
+  let baseIsolado
+  let cota
+
+  /**
+   * Um dev server à parte do `dev` de cima, de propósito.
+   *
+   * O `dev` de cima nasce do `vite.config.js` de verdade, onde o
+   * `guardaDeChave` da JSearch está montado *antes* do `pluginServidor` na
+   * lista de plugins. Sem `JSEARCH_API_KEY` (o caso normal de rodar teste)
+   * ele intercepta `/api/jsearch` e responde sem chamar `next()` — o
+   * `contarJSearch` do `pluginServidor` nunca chega a rodar, contando
+   * corretamente ou não, e um teste que meça a cota ali não distingue as
+   * duas situações. Com uma chave de mentira a requisição atravessaria o
+   * guarda e cairia no proxy de verdade do vite, que sai para a internet —
+   * exatamente o que este teste não pode fazer.
+   *
+   * Um servidor só com o `pluginServidor`, sem `guardaDeChave` nem proxy
+   * configurado, deixa a requisição passar pelo middleware de contagem e
+   * cair no fallback interno do vite (o `index.html` da SPA, sem sair da
+   * máquina) — o bastante para provar que o middleware roda e conta, sem
+   * depender de nenhuma chave nem de rede.
+   *
+   * A cota é injetada (`pluginServidor` já aceita `{ acervo, cota }`) para o
+   * teste poder ler o mesmo objeto que o middleware usa, em vez de ter que
+   * adivinhar onde o plugin abriu o banco preguiçoso dele.
+   */
+  beforeAll(async () => {
+    cota = criarCota(abrirBanco(':memory:'))
+    const { createServer } = await import('vite')
+    devIsolado = await createServer({
+      configFile: false,
+      logLevel: 'silent',
+      server: { port: 0 },
+      plugins: [pluginServidor({ cota })],
+    })
+    await devIsolado.listen()
+    baseIsolado = `http://localhost:${devIsolado.httpServer.address().port}`
+  }, 60000)
+
+  afterAll(() => devIsolado?.close())
+
+  test('uma requisição a /api/jsearch soma na cota', async () => {
+    expect(cota.ler().rede).toBe(0)
+
+    await fetch(`${baseIsolado}/api/jsearch/search-v2?query=TI`)
+
+    // A contagem acontece no listener de 'finish' da resposta, que já
+    // aconteceu quando o fetch acima resolveu — sem precisar de espera extra.
+    expect(cota.ler().rede).toBe(1)
   })
 })
