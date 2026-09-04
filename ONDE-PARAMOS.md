@@ -1,17 +1,113 @@
-# Onde paramos — 03/09/2026
+# Onde paramos — 04/09/2026
 
 Retomada rápida do protótipo VAGAS. O **README.md** explica *como as coisas
 funcionam*; este arquivo diz *em que pé estão* e *o que fazer a seguir*.
 
 > **Como ler:** o bloco abaixo é o estado de hoje. Depois dele vem o diário —
-> 03/09 primeiro, depois 02/09 —, do mais recente para o mais antigo — é onde estão as medições e o
+> 04/09 primeiro, depois 03/09, depois 02/09 —, do mais recente para o mais antigo — é onde estão as medições e o
 > **porquê** de cada mudança. As seções estruturais ("O que funciona hoje",
 > "Decisões já tomadas", "Pendências", "Armadilhas") vêm no fim e valem para
 > qualquer retomada.
 
 ---
 
-## Onde estamos agora — 03/09/2026
+## Onde estamos agora — 04/09/2026
+
+**O app está no ar, e o banco sobreviveu ao primeiro deploy.**
+`https://vagas-atalho-inteligente-para-ti.up.railway.app`
+
+Medido hoje: `GET /api/acervo` responde 200 com a linha `prova1`, gravada ontem
+às 23:47. O volume persistiu — era a dúvida que ficou de ontem, e ela está
+respondida.
+
+Hoje teve uma investigação sem conclusão e uma correção:
+
+**1. A aba Banco de Dados virou uma página inteiramente branca** no navegador do
+dono — sem menu lateral, sem mensagem. Não reproduziu em lugar nenhum: nem em
+navegador limpo, nem com 40 vagas antigas no `localStorage` para forçar a
+migração, nem em tela estreita, nem no bundle publicado, que foi conferido
+contra o `main` (hash `index-DPViLuf2.js` nos dois, compilando com
+`BASE_PATH=/`). Em janela anônima o app funcionou. **A causa segue
+desconhecida**, e está no estado daquele navegador — dado guardado ou extensão,
+que a anônima desliga juntos.
+
+**2. O limite de erro, para a próxima tela branca dizer o que é.** Um React sem
+limite desmonta a árvore inteira quando o render lança, e o que sobra é o
+`<body>` vazio: a mesma tela para erro de dado, extensão e defeito de código. O
+`LimiteDeErro` troca isso por um cartão com a mensagem escrita, o menu lateral
+vivo do lado, e a pilha de componentes no console.
+
+Testes: **404** (eram 398). Lint limpo fora do aviso pré-existente em
+`perfil.test.js`. Build OK.
+
+**O trabalho a seguir:** reproduzir a tela branca no navegador do dono, agora
+que ela fala, e corrigir a causa. O passo é dele: abrir o app, clicar na aba e
+copiar o que o cartão mostrar.
+
+---
+
+## 04/09 — a tela branca, e o limite que a faz falar
+
+A queixa foi "quando eu clico no banco de dados a tela parece branca". A
+investigação inteira está resumida acima; o que ficou de aprendizado está em
+"Armadilhas". Aqui fica o desenho do que foi construído.
+
+**O limite é classe, e não é escolha de estilo.** `getDerivedStateFromError` e
+`componentDidCatch` não têm equivalente em hook — capturar erro de render é a
+única coisa que o React 19 ainda exige de um componente de classe. `try/catch`
+em volta do JSX não serve: o corpo da função roda antes, e o erro acontece
+depois, no commit.
+
+**Dois pontos de montagem, e os dois têm motivo.** No `main.jsx`, em volta do
+`<App />`, é último recurso — pega o que quebrar no menu ou no próprio `App`, e
+nesses casos não sobra menu nenhum. No `App.jsx`, em volta do conteúdo do
+`<main>`, é o que vale no dia a dia: o estrago fica **dentro** da aba, e o menu
+lateral continua ali para sair dela.
+
+**A `key={aba}` é o mecanismo do esquecimento.** O React não desfaz o estado de
+erro sozinho. Sem ela, a aba que quebrasse deixaria o cartão na tela para
+sempre. Com ela, trocar de aba remonta o limite — e limite remontado nasce sem
+erro. Trocar de aba passa a ser, sozinho, o conserto.
+
+**A mensagem crua vai para a tela, e isso contraria o `ErroAcervo` de
+propósito.** Aquela regra — português na tela, causa crua só no console — vale
+para falhas **previstas**, que sabem se explicar. Um erro de render não é
+previsto e não tem tradução; escondê-lo não deixaria a tela mais gentil,
+deixaria muda — que foi exatamente o problema de hoje.
+
+**Primeiro teste de componente React do projeto, sem dependência nova.**
+`@testing-library` seria uma dependência para montar uma `<div>` e ler
+`textContent`; o `act` do React 19 com `createRoot` bastam. Mesma régua que
+escolheu `node:sqlite` em vez de Postgres. Precisa de
+`globalThis.IS_REACT_ACT_ENVIRONMENT = true`, senão o React escreve um
+`console.error` por montagem — que suja a suíte e entra na espionagem do
+console como se fosse do componente.
+
+**O que ele não captura:** erro em `onClick`, `setTimeout` ou `await`. São
+assíncronos, e o React já não os trata como falha de render. Quem cuida deles
+continua sendo o `try/catch` do `carregar()` e do `arquivar()`, e o
+`ErroAcervo`.
+
+**Achado de lado, não corrigido: o GitHub Pages ficou com o acervo morto.**
+Medido hoje — lá o `/api/acervo` resolve para
+`danielcampetti.github.io/api/acervo`, que não existe, e a aba Banco de Dados
+mostra "Não consegui carregar o acervo. O servidor respondeu 404" para sempre.
+É consequência esperada de o acervo ter virado servidor em 03/09, e o README já
+diz que o Railway é a versão que funciona — mas o endereço do Pages continua no
+ar e continua sendo o que o README anuncia no topo. Duas saídas: apontar o
+README para o Railway, ou dar ao Pages uma tela que diga que ali o acervo não
+existe. Decisão do dono.
+
+**A prova foi ponta a ponta.** Injetei `throw new Error('cidade.toLowerCase is
+not a function')` na aba Banco de Dados, compilei, servi e cliquei: menu vivo,
+mensagem escrita, `[limite] a tela quebrou:` com a pilha no console, e clicar em
+"Vagas" limpou sozinho. Depois removi o defeito. Os dois testes que passariam de
+primeira — a passagem direta e o irmão sobrevivente — foram verificados
+reintroduzindo o defeito e vendo-os falhar, pela regra de 03/09.
+
+---
+
+## 03/09 — o banco no servidor, e o contador que encolhia
 
 **O app está no ar, com banco de verdade.**
 `https://vagas-atalho-inteligente-para-ti.up.railway.app`
@@ -1089,6 +1185,31 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
   796 testes em 44 arquivos — o vitest varria também as cópias dentro de
   `.claude/worktrees/`. Passavam nos dois casos, e um número inflado desses faz
   confiar numa cobertura que não existe.
+- **Página branca apaga o próprio diagnóstico.** Um erro de render num React sem
+  limite desmonta a árvore inteira, e a tela que sobra não distingue erro de
+  dado, extensão do navegador e defeito de código — quem vê só pode dizer "ficou
+  branco". Em 04/09 isso custou uma investigação inteira (reproduzir no Railway,
+  comparar o bundle publicado com o do `main`, simular a migração do
+  `localStorage`) para uma mensagem que estava no console do navegador do dono o
+  tempo todo. O `LimiteDeErro` existe para essa mensagem chegar à tela.
+- **Janela anônima desliga duas coisas ao mesmo tempo.** Ela zera o
+  `localStorage` **e** as extensões. "Funciona na anônima" prova que é estado do
+  navegador e não diz qual dos dois — é um teste que não separa as hipóteses.
+  Quem separa é a linha do console: `NotFoundError ... removeChild` é extensão
+  mexendo no DOM; `TypeError` apontando para o bundle é código.
+- **Nunca mande limpar dados do site para consertar tela.** `vagas:cota` é o
+  contador das 200 do mês e `vagas:cv` é o currículo — os dois moram na mesma
+  origem que o acervo. Apagar tudo troca um defeito de tela por perda de dado
+  que ninguém consegue reconstruir. Remova a chave suspeita, uma por vez, depois
+  de baixar um backup.
+- **Para conferir o que está publicado, compile com a mesma `base`.** O bundle
+  do Railway e o do GitHub Pages saem do mesmo código com hashes diferentes,
+  porque `base` entra no conteúdo. `MSYS_NO_PATHCONV=1 BASE_PATH=/ npm run
+  build` reproduz o do Railway byte a byte — e o `MSYS_NO_PATHCONV` não é
+  enfeite: sem ele o Git Bash converte o `/` num caminho do Windows, e o build
+  sai com `base` `/Program%20Files/Git/`. Sem essa conferência não dá para
+  descartar "o deploy está velho", que é a primeira suspeita de todo defeito que
+  só aparece publicado.
 - O protótipo já teve **58 vagas fictícias atribuídas a empresas reais** da
   Serra Gaúcha. Foram removidas, mas se voltar a inventar dados, lembre que o
   site é público.
@@ -1099,7 +1220,7 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 
 ```bash
 npm run dev        # a busca e a Avaliação IA só funcionam aqui — porta 5173, caminho /vagasatalhointeligenteparati/
-npm test           # vitest — 398 testes, 22 arquivos
+npm test           # vitest — 404 testes, 23 arquivos
 npm run lint       # oxlint (não pega no-undef hoje; veja a pendência 6)
 npm run build      # gera dist/
 npm run cidades    # regenera src/data/cidades.js a partir do IBGE
