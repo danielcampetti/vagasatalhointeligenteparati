@@ -4,7 +4,7 @@
 
 import { execFileSync } from 'node:child_process'
 import { beforeEach, describe, expect, test, vi } from 'vitest'
-import { CAMPOS_PATCH, abrirBanco, criarAcervo } from './banco'
+import { CAMPOS_PATCH, abrirBanco, criarAcervo, criarCota } from './banco'
 
 const vaga = (id, extra = {}) => ({
   id,
@@ -394,5 +394,79 @@ describe('fechar — o banco não pode depender de sorte com o GC', () => {
     local.guardar([vaga('a')])
     local.fechar()
     expect(() => local.listar()).toThrow()
+  })
+})
+
+describe('criarCota', () => {
+  let cota
+
+  beforeEach(() => {
+    cota = criarCota(abrirBanco(':memory:'))
+  })
+
+  test('banco novo começa em zero, e com um ciclo aberto', () => {
+    const lida = cota.ler()
+    expect(lida.rede).toBe(0)
+    expect(lida.usos).toEqual([])
+    expect(typeof lida.desde).toBe('string')
+  })
+
+  test('registrar incrementa o contador e guarda a linha', () => {
+    const lida = cota.registrar({
+      consulta: 'Técnico de TI em Caxias do Sul',
+      janela: 'month',
+      remotas: false,
+      continuacao: false,
+      status: 200,
+    })
+
+    expect(lida.rede).toBe(1)
+    expect(lida.usos).toHaveLength(1)
+    expect(lida.usos[0].consulta).toBe('Técnico de TI em Caxias do Sul')
+    expect(lida.usos[0].status).toBe(200)
+  })
+
+  test('o histórico para no teto, e o contador não', () => {
+    const pequena = criarCota(abrirBanco(':memory:'), { teto: 3 })
+    for (let i = 0; i < 5; i++) {
+      pequena.registrar({ consulta: `busca ${i}`, status: 200 }, `2026-09-04T00:0${i}:00.000Z`)
+    }
+
+    const lida = pequena.ler()
+    expect(lida.usos).toHaveLength(3)
+    // O ponto inteiro da separação: o corte da lista não pode encolher o número.
+    expect(lida.rede).toBe(5)
+  })
+
+  test('zerar reinicia número, data e histórico', () => {
+    cota.registrar({ consulta: 'algo', status: 200 })
+    const lida = cota.zerar('2026-10-01T00:00:00.000Z')
+
+    expect(lida.rede).toBe(0)
+    expect(lida.usos).toEqual([])
+    expect(lida.desde).toBe('2026-10-01T00:00:00.000Z')
+  })
+
+  test('ajustar muda o número e não toca o histórico', () => {
+    cota.registrar({ consulta: 'algo', status: 200 })
+    const lida = cota.ajustar(180)
+
+    expect(lida.rede).toBe(180)
+    expect(lida.usos).toHaveLength(1)
+  })
+
+  test('ajustar ignora o que não é contagem', () => {
+    cota.registrar({ consulta: 'algo', status: 200 })
+    expect(cota.ajustar('abacaxi').rede).toBe(1)
+    expect(cota.ajustar(-3).rede).toBe(1)
+  })
+
+  /**
+   * Sem uma referência viva ao DatabaseSync o GC o coleta, o node:sqlite
+   * finaliza os statements, e toda operação passa a lançar. O `db` no objeto é
+   * a trava — apagá-lo por parecer sem uso derruba a produção.
+   */
+  test('o db sai no objeto, e é ele que segura o banco vivo', () => {
+    expect(cota.db).toBeDefined()
   })
 })

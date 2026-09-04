@@ -141,6 +141,16 @@ export function abrirBanco(caminho = ':memory:') {
       dados    TEXT NOT NULL
     );
     CREATE INDEX IF NOT EXISTS vagas_entrouem ON vagas(entrouEm DESC);
+    CREATE TABLE IF NOT EXISTS cota (
+      id    INTEGER PRIMARY KEY CHECK (id = 1),
+      desde TEXT    NOT NULL,
+      rede  INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS usos (
+      quando TEXT NOT NULL,
+      dados  TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS usos_quando ON usos(quando DESC);
   `)
   return db
 }
@@ -307,4 +317,134 @@ export function criarAcervo(db, { teto = TETO } = {}) {
    * referencia agora, pelo `BEGIN`/`COMMIT` — duas amarras, não uma.)
    */
   return { db, listar, buscarPorId, guardar, atualizar, fechar }
+}
+
+/**
+ * Quantas buscas o histórico guarda.
+ *
+ * É teto de **exibição**, o mesmo 50 que o `cota.js` usava. Ele pode cortar à
+ * vontade porque a contagem não sai daqui: mora na coluna `rede` da tabela
+ * `cota`. Era exatamente a contagem derivada de uma lista com teto que fazia o
+ * painel mostrar 3/200 com 50 gastas — cada repetição empurrava uma requisição
+ * paga para fora do corte, e o número encolhia sozinho.
+ */
+export const TETO_USOS = 50
+
+/**
+ * A cota da conta, no mesmo banco do acervo.
+ *
+ * Quem escreve aqui é o proxy, e ninguém mais: o `contagem.js` chama
+ * `registrar` depois de cada requisição que de fato saiu. O navegador só lê —
+ * fora `zerar` e `ajustar`, que são operação do dono e passam pelo segredo.
+ *
+ * ## Uma linha, garantida pelo schema
+ *
+ * `CHECK (id = 1)` é o que faz a tabela `cota` ser um singleton. Sem ele, um
+ * `INSERT` distraído criaria um segundo contador e nada avisaria qual dos dois
+ * o painel lê.
+ */
+export function criarCota(db, { teto = TETO_USOS } = {}) {
+  const abrirCiclo = db.prepare(
+    'INSERT INTO cota (id, desde, rede) VALUES (1, ?, 0) ON CONFLICT(id) DO NOTHING',
+  )
+  const lerLinha = db.prepare('SELECT desde, rede FROM cota WHERE id = 1')
+  const incrementar = db.prepare('UPDATE cota SET rede = rede + 1 WHERE id = 1')
+  const porNumero = db.prepare('UPDATE cota SET rede = ? WHERE id = 1')
+  const reiniciar = db.prepare('UPDATE cota SET desde = ?, rede = 0 WHERE id = 1')
+  const gravarUso = db.prepare('INSERT INTO usos (quando, dados) VALUES (?, ?)')
+  const listarUsos = db.prepare('SELECT quando, dados FROM usos ORDER BY quando DESC')
+  const limparUsos = db.prepare('DELETE FROM usos')
+  // `LIMIT -1 OFFSET ?` é o idioma do SQLite para "tudo depois dos N
+  // primeiros" — o mesmo do `aparar` do acervo. Com a ordem `quando DESC`, o
+  // que sobra do offset são as linhas mais antigas.
+  const apararUsos = db.prepare(
+    `DELETE FROM usos WHERE rowid IN (
+       SELECT rowid FROM usos ORDER BY quando DESC LIMIT -1 OFFSET ?
+     )`,
+  )
+
+  function ler() {
+    abrirCiclo.run(agora())
+    const linha = lerLinha.get()
+    return {
+      desde: linha.desde,
+      rede: Number(linha.rede),
+      usos: listarUsos.all().map((l) => ({ quando: l.quando, ...JSON.parse(l.dados) })),
+    }
+  }
+
+  /**
+   * Uma requisição que saiu: o número sobe e a linha entra.
+   *
+   * As duas na **mesma transação**. Separadas, existiria a janela em que a
+   * requisição foi contada e não aparece na lista — e uma lista que não
+   * explica o número é o defeito de 03/09 voltando por outra porta.
+   */
+  function registrar(dados = {}, quando = agora()) {
+    db.exec('BEGIN')
+    try {
+      abrirCiclo.run(quando)
+      incrementar.run()
+      gravarUso.run(quando, JSON.stringify(dados))
+      apararUsos.run(teto)
+      db.exec('COMMIT')
+    } catch (err) {
+      // O erro do ROLLBACK não pode substituir o erro de verdade — mesma
+      // razão do `guardar` do acervo.
+      try {
+        db.exec('ROLLBACK')
+      } catch {
+        // Desfazer já falhou; quem manda é o original.
+      }
+      throw err
+    }
+    return ler()
+  }
+
+  /**
+   * Ciclo novo: zera o número, a data e o histórico.
+   *
+   * À mão, e não por calendário: o provedor conta pela data da assinatura, não
+   * pelo dia 1º, e adivinhar isso daria um número errado.
+   */
+  function zerar(quando = agora()) {
+    db.exec('BEGIN')
+    try {
+      abrirCiclo.run(quando)
+      reiniciar.run(quando)
+      limparUsos.run()
+      db.exec('COMMIT')
+    } catch (err) {
+      try {
+        db.exec('ROLLBACK')
+      } catch {
+        // idem
+      }
+      throw err
+    }
+    return ler()
+  }
+
+  /**
+   * Põe o contador no número que o provedor mostra.
+   *
+   * **O histórico não é tocado.** As linhas que estão lá aconteceram mesmo, e
+   * apagá-las para casar com um número maior seria trocar dado verdadeiro por
+   * aparência de coerência.
+   *
+   * Valor que não é contagem é ignorado em silêncio: o campo da tela é um
+   * `number`, e um `NaN` vindo dele não pode virar o teto do painel.
+   */
+  function ajustar(gastas) {
+    const alvo = Math.round(Number(gastas))
+    if (!Number.isInteger(alvo) || alvo < 0) return ler()
+    abrirCiclo.run(agora())
+    porNumero.run(alvo)
+    return ler()
+  }
+
+  // `db` sai no objeto pela razão que o `criarAcervo` documenta: sem uma
+  // referência viva ao `DatabaseSync`, o GC o coleta, o `node:sqlite` finaliza
+  // os statements, e toda rota passa a dar 500 até o processo reiniciar.
+  return { db, ler, registrar, zerar, ajustar }
 }
