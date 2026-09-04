@@ -379,6 +379,15 @@ export function criarCota(db, { teto = TETO_USOS } = {}) {
    * As duas na **mesma transação**. Separadas, existiria a janela em que a
    * requisição foi contada e não aparece na lista — e uma lista que não
    * explica o número é o defeito de 03/09 voltando por outra porta.
+   *
+   * **Depende de nunca intercalar com o `BEGIN`/`COMMIT` do `guardar`.** Os
+   * dois usam transação crua no mesmo `DatabaseSync`, e um `ROLLBACK` daqui no
+   * meio da leva do `guardar` desfaria a busca inteira que ela está gravando.
+   * Hoje isso não acontece porque os dois são inteiramente síncronos — o
+   * `node:sqlite` é síncrono e o Node não tem como entregar o `finish` do
+   * `contarJSearch` no meio de nenhum dos dois. No dia em que um dos dois
+   * ganhar um `await` ou virar savepoint, essa garantia some, e o
+   * `contagem.js` engole o estrago como `console.error`.
    */
   function registrar(dados = {}, quando = agora()) {
     db.exec('BEGIN')

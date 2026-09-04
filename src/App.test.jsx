@@ -256,11 +256,32 @@ describe('PainelControle: o histórico do servidor', () => {
       />,
     )
 
+  /**
+   * Existe um nó, sem filhos de elemento, cujo texto (aparado) é exatamente
+   * `texto`? `toContain` de string casa substring em qualquer lugar da
+   * árvore; isto casa um span específico, do jeito exato como o painel o
+   * desenha — é o que distingue a coluna de status de qualquer outro lugar
+   * onde o mesmo número apareça de raspão, como parte de outro rótulo.
+   */
+  function folhaComTexto(container, texto) {
+    return [...container.querySelectorAll('*')].some(
+      (el) => el.children.length === 0 && el.textContent.trim() === texto,
+    )
+  }
+
+  /**
+   * Não `toContain('200')`: essa string já aparece sempre, com `rede: 3` e
+   * qualquer status, no rótulo "/ 200 requisições" do cartão do número — a
+   * asserção passava mesmo com a coluna de status inteiramente apagada.
+   * `folhaComTexto` procura um nó-folha cujo texto é *exatamente* '200', sem
+   * mais nada em volta, e só a coluna de status desenha um assim: o rótulo
+   * do cartão é "/ 200 requisições" por inteiro, nunca '200' sozinho.
+   */
   test('a linha mostra a consulta e o status da resposta', () => {
     const container = pronto([USO])
 
     expect(container.textContent).toContain('Técnico de TI in Caxias do Sul')
-    expect(container.textContent).toContain('200')
+    expect(folhaComTexto(container, '200')).toBe(true)
   })
 
   test('uma requisição que falhou mostra o status dela, e não some da lista', () => {
@@ -311,6 +332,7 @@ describe('PainelControle: o histórico do servidor', () => {
  */
 describe('a cota é lida quando o painel é aberto, não uma vez por carregamento', () => {
   let pedidos
+  let fetchOriginal
 
   /**
    * Um `fetch` de mentira que só anota quem foi chamado.
@@ -318,9 +340,18 @@ describe('a cota é lida quando o painel é aberto, não uma vez por carregament
    * Objeto cru e não `Response`: o `cotaRemota.js` e o `acervoRemoto.js` usam
    * `ok`, `status` e `json()`, e mais nada — um dublê com a superfície exata
    * do que é consumido falha alto se alguém passar a depender de outra coisa.
+   *
+   * Atribuição crua, e não `vi.spyOn` — e é por isso que o `afterEach` abaixo
+   * existe e não pode ser trocado por `vi.restoreAllMocks()`: este último não
+   * desfaz uma atribuição direta em `globalThis.fetch`, só reverte espiões.
+   * Sem restaurar à mão, o próximo `describe` deste arquivo herdaria este
+   * `fetch`, que responde qualquer URL fora de `/api/cota` com `[]` — um
+   * futuro teste de `lerAcervoRemoto` passaria olhando um acervo vazio que
+   * nunca pediu, pelo motivo errado.
    */
   beforeEach(() => {
     pedidos = []
+    fetchOriginal = globalThis.fetch
     globalThis.fetch = async (url) => {
       const caminho = String(url)
       pedidos.push(caminho)
@@ -329,6 +360,10 @@ describe('a cota é lida quando o painel é aberto, não uma vez por carregament
         : []
       return { ok: true, status: 200, json: async () => corpo }
     }
+  })
+
+  afterEach(() => {
+    globalThis.fetch = fetchOriginal
   })
 
   const daCota = () => pedidos.filter((p) => p.startsWith('/api/cota')).length

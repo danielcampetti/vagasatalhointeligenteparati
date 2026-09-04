@@ -31,6 +31,20 @@ describe('lerCotaRemota', () => {
 
     await expect(lerCotaRemota()).rejects.toBeInstanceOf(ErroCota)
   })
+
+  /**
+   * O mesmo defeito do teste acima, um passo adiante: aqui o corpo *é* JSON,
+   * só que `rede` não é a cota. `App.jsx` faz `const gastas = cota.rede` sem
+   * guarda nenhuma — e `Math.max(0, 200 - null)` desenha "200 requisições
+   * restantes" com a barra verde: a mentira das 200 inteiras, só que em
+   * branco em vez de zero. Um rename de campo no servidor produziria isto
+   * hoje sem quebrar nenhum teste existente.
+   */
+  test('200 com rede que não é número lança, não devolve zero', async () => {
+    respondendo({ desde: '2026-09-01T00:00:00.000Z', rede: null, usos: [], protegido: false })
+
+    await expect(lerCotaRemota()).rejects.toBeInstanceOf(ErroCota)
+  })
 })
 
 describe('lerCotaRemota: os erros', () => {

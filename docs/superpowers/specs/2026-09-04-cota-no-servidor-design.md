@@ -73,7 +73,7 @@ Todas em 04/09, na conversa que precedeu este documento.
 | Decisão | Por quê |
 |---|---|
 | **Contar certo, sem barrar no limite** | O alvo é um número verdadeiro. Recusar requisição quando as 200 acabam é outro trabalho, e não é este |
-| **Quem conta é o proxy, no servidor** | É a única contagem que não pode ser perdida (aba fechada no meio), duplicada (dois cliques) nem contornada. E conta o `npm run dev` junto, que é o que finalmente une os dois contadores que hoje se ignoram |
+| **Quem conta é o proxy, no servidor** | É a única contagem que não pode ser duplicada (dois cliques) nem contornada — e conta o `npm run dev` junto, que é o que finalmente une os dois contadores que hoje se ignoram. (Tem um limite: ver §10 — uma aba fechada bem no meio da resposta pode, sim, perder a contagem de uma requisição que já saiu.) |
 | **Vão para o servidor: contador + histórico de rede** | O servidor vira o **único escritor** do dado compartilhado. Sem POST de contagem vindo do cliente não há dois caminhos de escrita — a lição que o acervo já pagou com o `PATCH` que apagava nota paga |
 | **O cache continua local, e a contagem dele também** | Compartilhar o cache faria as 200 renderem muito mais, e é tentador. É um trabalho maior — mexe no caminho de busca inteiro — e fica para depois |
 | **"Zerar" e "Ajustar" atrás de um segredo do ambiente** | São as únicas escritas que o cliente manda, e são destrutivas num app público. Zerar o contador é um estrago que ninguém desfaz: o número verdadeiro só existe no painel do provedor |
@@ -302,10 +302,14 @@ subconta e que só o provedor sabe. Migrar automaticamente somaria os palpites
 de cada navegador que abrisse o app. O número certo já tem dono, e o "Ajustar"
 é a porta que existe para trazê-lo.
 
-O `vagas:cota` local **não é apagado**: o cache continua nele, e os campos
-órfãos (`totais.rede`, `usos`, `desde`) ficam parados sem incomodar ninguém. É
-a mesma escolha do `marcarMigrado` do acervo — apagar seria trocar um backup de
-graça por nada.
+O `vagas:cota` local **não é apagado** de propósito, mesma escolha do
+`marcarMigrado` do acervo — apagar seria trocar um backup de graça por nada.
+Mas os campos órfãos (`totais.rede`, `usos`, `desde`) não sobrevivem sozinhos:
+`registrarUso` sempre grava no formato novo (`{ totais: { cache }, cache }`),
+então a primeira busca depois do deploy — não uma limpeza deliberada — já
+reescreve o `localStorage` sem eles. `src/cota.js` documenta isso honestamente
+no próprio código; esta seção estava descrevendo um comportamento que nunca
+chegou a existir.
 
 ---
 
@@ -318,8 +322,28 @@ quiser. Um erro de banco ali vira `console.error` e nada mais.
 **Um `GET /api/cota` que falha** vira o estado `falhou` do painel, com a
 mensagem em português e o botão de tentar de novo. Nunca zero.
 
-**Um 403 nos POSTs** desabilita os dois botões com o motivo escrito, em vez de
-deixá-los clicáveis e inertes.
+**Um 403 nos POSTs** aparece como um aviso vermelho no painel, com o motivo
+escrito — e não desabilitando os dois botões. É melhor assim: a senha errada é
+o caso comum, e "Zerar"/"Ajustar" continuam clicáveis para digitar de novo e
+tentar, sem precisar recarregar a página para reativá-los.
+
+### Um limite conhecido: aba fechada no meio da resposta
+
+`res.on('finish')` **não** dispara quando o socket do cliente cai antes de a
+resposta terminar de sair — verificado, não suposto. O `fetch` do `reproxiar`
+para a JSearch não está amarrado à conexão do cliente: ele já saiu e a conta
+já foi debitada na OpenWeb Ninja antes de o `finish` ter chance de disparar —
+então uma aba fechada bem nesse instante gasta uma das 200 sem que o
+contador se mova. É raro — a janela é os poucos milissegundos entre a
+resposta do upstream e o fim do envio ao cliente —, mas existe, e a decisão
+de mudar isso é do dono do projeto, não deste documento.
+
+O conserto óbvio, `res.on('close')`, **sempre** dispara — inclusive num
+pedido normal, depois do `finish` — mas trocar um pelo outro não é de graça:
+`close` também dispara num abort **antes** do `fetch` ao upstream sair, e
+contaria uma requisição que talvez nunca tenha sido feita; e dispara antes de
+o marcador `sem-chave` estar necessariamente gravado no `res`, o que
+quebraria a distinção da §6 bem no caso que ela existe para decidir.
 
 ---
 

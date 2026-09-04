@@ -57,6 +57,19 @@ async function ida(caminho, opcoes) {
     )
   }
 
+  // Mesma guarda, agora sobre o número em si: veio JSON, mas `rede` não é um
+  // inteiro não-negativo — um rename de campo no servidor, por exemplo. Sem
+  // isto o defeito não é a tela quebrar: é `App.jsx` fazer `Math.max(0, 200 -
+  // null)` e desenhar "200 requisições restantes" com a barra verde — a
+  // mentira que este módulo existe para impedir, só que em branco em vez de
+  // zero, o que o teste do `corpo === null` acima não pega.
+  if (!Number.isInteger(corpo.rede) || corpo.rede < 0) {
+    throw new ErroCota(
+      'O servidor respondeu uma cota sem número válido. Ele pode estar em atualização.',
+      { status: res.status },
+    )
+  }
+
   return corpo
 }
 

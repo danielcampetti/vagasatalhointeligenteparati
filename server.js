@@ -182,6 +182,8 @@ export function criarApp({ banco = null, acervo = null, cota = null } = {}) {
       // Só a JSearch tem cota de 200/mês. A Claude é cobrada por token e tem
       // o próprio medidor, no `custo.js`.
       ...(destino.nome === 'jsearch' ? [contarJSearch(aCota)] : []),
+      // Sem interpretar: o corpo é repassado byte a byte. Um `express.json()`
+      // aqui reserializaria o pedido da Claude e mudaria o que o upstream vê.
       express.raw({ type: () => true, limit: '10mb' }),
       reproxiar(destino),
     )
@@ -245,6 +247,23 @@ if (ehPontoDeEntrada) {
         (daVariavel
           ? ''
           : ' — SEM BANCO_CAMINHO: disco efêmero, o acervo some no próximo deploy'),
+    )
+    /**
+     * Mesmo raciocínio, mesma linha do log, para a outra falha sem sintoma:
+     * `CONTROLE_SEGREDO` ausente é uma decisão válida (ver README), mas sem
+     * aviso nenhum um servidor aberto fica visualmente idêntico a um
+     * protegido — o painel Controle não diz. Quem descobre é quem reparar,
+     * um dia, que o contador zerou sozinho: `POST /api/cota/zerar` fica
+     * aberto para qualquer `curl` que alcance a URL pública, e o estrago não
+     * tem desfazer.
+     */
+    const temSegredo = Boolean(process.env.CONTROLE_SEGREDO?.trim())
+    console.log(
+      `[controle] ${
+        temSegredo
+          ? 'segredo presente'
+          : 'SEM CONTROLE_SEGREDO: zerar e ajustar ficam abertos para qualquer um que alcance esta URL'
+      }`,
     )
   })
 }

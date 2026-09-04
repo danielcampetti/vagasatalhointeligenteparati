@@ -68,6 +68,9 @@ import PainelVagaInteligente from './paineis/PainelVagaInteligente'
  * O estado da tela em si é só memória, mas nem tudo se perde no F5:
  * `curriculo.js`, `custo.js` e `cota.js` gravam em localStorage
  * (`vagas:cv`, `vagas:custo`, `vagas:cota`), e isso sobrevive.
+ * `vagas:controle` também: a senha do segredo do controle, digitada aqui
+ * mesmo — é a única das quatro chaves sem módulo dono, então este
+ * comentário é o único lugar onde alguém procurando por ela a acha.
  * ------------------------------------------------------------------ */
 
 const COLUNAS =
@@ -3862,9 +3865,11 @@ export default function App() {
    * requisições por mês, e repetir uma consulta já feita não pode custar uma
    * delas.
    *
-   * Só conta como requisição gasta o que de fato tocou a API — um erro de
-   * chave ausente nunca sai da máquina, e um 401 é recusado antes de debitar.
-   * Quem sabe essa diferença é o `tocouApi` do ErroJSearch.
+   * Quem sabe se um erro consumiu uma das 200 não é mais este arquivo: é o
+   * `consomeCota` do `src/servidor/contagem.js`, decidido pelo `res` que o
+   * proxy de fato mandou, no momento em que a requisição sai — não aqui,
+   * lendo o erro depois que ela já voltou. Este `catch`, abaixo, não registra
+   * mais nada por causa disso.
    */
   async function buscar() {
     if (buscando || ranqueando) return
@@ -3991,15 +3996,6 @@ export default function App() {
       setErroBusca(erro.message)
       setBanco([])
       setConsultaFeita(true)
-      // Um erro que chegou à API consumiu uma das 200 mesmo sem devolver vaga.
-      if (erro.tocouApi) {
-        setCacheLocal(
-          registrarUso(termo, cidadeAlvo, 'rede', {
-            janela: janelaAlvo,
-            modalidade: modalidadeAlvo,
-          }),
-        )
-      }
     } finally {
       setBuscando(false)
     }
@@ -4111,14 +4107,6 @@ export default function App() {
       setErroBusca(erro.message)
       // A lista que já estava na tela fica: ela custou requisições anteriores,
       // e o erro é da página nova, não dela.
-      if (erro.tocouApi) {
-        setCacheLocal(
-          registrarUso(termo, cidadeAlvo, 'rede', {
-            janela: janelaBaixada,
-            modalidade: modalidadeBaixada,
-          }),
-        )
-      }
     } finally {
       setCarregandoMais(false)
     }
@@ -4321,13 +4309,6 @@ export default function App() {
       setErroIa(erro.message)
       setVagasIa([])
       setBuscaIaFeita(true)
-      // Mesmo raciocínio de `buscar()`: um erro que chegou à API consumiu
-      // uma das 200 mesmo sem devolver vaga.
-      if (erro.tocouApi) {
-        setCacheLocal(
-          registrarUso(termo, cidadeAlvo, 'rede', { janela: JANELA_PADRAO }),
-        )
-      }
     } finally {
       setBuscandoIa(false)
     }

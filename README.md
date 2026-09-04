@@ -54,9 +54,11 @@ O que continua sendo frio:
   Claude, ainda não construída. A coluna mostra "—".
 - A lista de 5.571 cidades do IBGE é embutida no bundle, não buscada em runtime.
 - Favoritar e arquivar valem só para a sessão: recarregar volta ao estado
-  inicial. **A exceção é a aba Controle** — contagem de cota e cache das buscas
-  ficam no `localStorage`, porque uma cota mensal que zera a cada F5 não
-  controlaria nada. Continua sem servidor: vive só na máquina de quem abre.
+  inicial. **A exceção é a aba Controle** — a contagem da cota mensal mora no
+  servidor agora, e é da conta: compartilhada por quem quer que abra o app,
+  publicado ou em `npm run dev`. Só o cache das buscas continua no
+  `localStorage`, esse sim vivendo só na máquina de quem abriu (ver "A aba
+  Controle e a cota da API", abaixo).
 
 ## Configurando a chave
 
@@ -433,7 +435,9 @@ O número agora é real: a aba Vagas chama a API, e cada chamada entra aqui.
 **O cache é o que faz as 200 renderem.** Cada busca é identificada por
 `cargo|cidade`. Se a consulta já foi feita, o resultado sai do `localStorage` e
 **a requisição não acontece**; senão a chamada sai e gasta uma. A aba mostra as
-duas contagens, e o histórico marca cada busca com sua origem.
+duas contagens — a de rede, que é da conta e vem do servidor, e a de
+repetições que o cache economizou, que é deste navegador — e o histórico, que
+só lista o que de fato foi à rede, mostra o status de cada resposta.
 
 O cache guarda as vagas inteiras, com descrição — por isso tem teto de 20
 consultas, descartando as mais antigas. O `localStorage` tem uns 5 MB e não vale
@@ -445,10 +449,13 @@ enchê-lo de histórico.
 |---|---|
 | `.env` sem chave | **Não** — um middleware corta antes do proxy; nada sai da máquina |
 | 401, chave inválida | **Não** — a API recusa antes de debitar |
+| Upstream inalcançável | **Não** — marcado `sem-resposta`; a JSearch nunca chegou a ser perguntada |
 | 429, limite atingido | **Sim** — a requisição chegou lá |
 | 200 sem resultado | **Sim** — buscar e não achar custa igual |
 
-Quem carrega essa distinção é o campo `tocouApi` do `ErroJSearch`.
+Quem carrega essa distinção não é mais o cliente: é `consomeCota`, em
+`src/servidor/contagem.js`, decidido pelo `res` que o proxy de fato mandou —
+o mesmo em produção e em `npm run dev`.
 
 Duas regras que valem conhecer:
 
@@ -460,10 +467,21 @@ Duas regras que valem conhecer:
   número errado. Zere quando o plano virar. *Limpar cache* é independente: zerar
   a contagem preserva o cache, e limpar o cache preserva a contagem.
 
-Tudo mora em `src/cota.js`, isolado do `App.jsx` — que já tem 2.500 linhas e não
-precisa ser dono do `localStorage` também. Toda leitura e escrita é defensiva:
-em aba anônima, com storage bloqueado ou com o valor corrompido, o acesso lança,
-e a tela não pode quebrar por causa do contador. No pior caso ele volta a zero.
+O cache continua em `src/cota.js`, isolado do `App.jsx` — que já tem milhares
+de linhas e não precisa ser dono do `localStorage` também. A contagem em si
+saiu de lá: mora no banco do servidor (`src/servidor/banco.js`), é escrita
+pelo middleware `src/servidor/contagem.js`, servida por
+`src/servidor/rotasCota.js` e lida pela tela por `src/cotaRemota.js`. Toda
+leitura e escrita do cache é defensiva: em aba anônima, com storage bloqueado
+ou com o valor corrompido, o acesso lança, e a tela não pode quebrar por
+causa dele.
+
+**A contagem em si nunca volta a zero por falha de rede — o oposto do que
+valia quando ela morava no `localStorage`.** Um `GET /api/cota` que falha cai
+no estado `falhou` do painel, com o motivo escrito e um botão para tentar de
+novo. Zero seria a mentira "você tem as 200 inteiras" para quem já gastou 180
+— e é exatamente a mentira que esta separação existe para impedir. Ver
+`src/cotaRemota.js`.
 
 ## O botão Buscar
 
@@ -611,12 +629,16 @@ src/
   main.jsx          # bootstrap do React
   App.jsx           # a página inteira (uma tela só, sem router — abas em estado local)
   index.css         # Tailwind + tokens do tema + estilos base
-  cota.js           # contagem da cota da API + cache, no localStorage
+  cota.js           # cache das buscas, no localStorage — a contagem foi para o servidor
+  cotaRemota.js     # busca a cota no servidor; falha nunca vira zero
   janela.js         # a janela de publicação: date_posted + o corte local
   api/jsearch.js    # a chamada de rede e os erros traduzidos
   api/mapear.js     # resposta da JSearch -> a forma de vaga da tabela
   data/vagas.js     # ⬅️ os dados mockados: é aqui que se edita o conteúdo
   data/cidades.js   # os 5.571 municípios do IBGE — gerado, não editar à mão
+  servidor/contagem.js      # middleware que conta a cota pelo que o proxy respondeu
+  servidor/rotasCota.js     # GET /api/cota, POST /zerar e /ajustar
+  servidor/pluginServidor.js # monta acervo e cota sob o npm run dev (vite)
 scripts/
   gerar-cidades.mjs # regenera cidades.js a partir da API do IBGE
 public/

@@ -68,11 +68,18 @@ própria — a mesma disciplina do acervo em 03/09. Spec e plano em
 **Quem passou a contar é o proxy, não mais um POST do cliente.** Todo pedido à
 JSearch já atravessava o `server.js` em produção ou o `server.proxy` do vite no
 `npm run dev` — é o único ponto que não pode ser burlado (não há como pedir a
-JSearch direto do navegador sem CORS) nem perdido (uma aba fechada no meio de
-uma busca não perde a contagem, porque quem conta não é a aba). `contagem.js`
-registra um listener em `res.on('finish')` e olha só o `res.statusCode` — o que
-os dois proxies, que não têm nada em comum por dentro (um `fetch` que vira
-buffer, um `http-proxy` que faz pipe), produzem igual.
+JSearch direto do navegador sem CORS). `contagem.js` registra um listener em
+`res.on('finish')` e olha só o `res.statusCode` — o que os dois proxies, que
+não têm nada em comum por dentro (um `fetch` que vira buffer, um `http-proxy`
+que faz pipe), produzem igual.
+
+**Limite conhecido, e não escondido: `finish` não dispara se o socket cair
+antes da resposta terminar de sair.** O `fetch` da JSearch não está amarrado à
+conexão do navegador — ele sai e é cobrado de qualquer jeito —, então uma aba
+fechada bem nesse instante gasta uma das 200 sem que o contador se mova. Raro
+(a janela é milissegundos), mas real; trocar por `res.on('close')` traria o
+problema oposto (contar requisição que talvez nunca tenha saído). Decisão de
+mudar isso é do dono do projeto — ver §10 da spec.
 
 **O marcador `sem-resposta`, e por que a regra precisava dele.** A regra do que
 consome cota já existia no `jsearch.js` do cliente (`!guardaLocal &&

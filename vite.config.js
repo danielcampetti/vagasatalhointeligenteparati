@@ -123,6 +123,11 @@ export default defineConfig(({ mode }) => {
               // O mesmo marcador do `server.js`: upstream inalcançável não
               // debitou cota. Sem ele, dev e produção contariam diferente
               // pela mesma falha de rede.
+              //
+              // O `?.` não é defensivo à toa: no caminho de websocket este
+              // terceiro argumento não é um `res` do HTTP, é um `net.Socket`
+              // cru, que não tem `setHeader`. Chamar sem a guarda derrubaria
+              // o próprio handler de erro no upgrade de conexão.
               if (res?.setHeader && !res.headersSent) {
                 res.setHeader('x-jsearch-proxy', 'sem-resposta')
               }
