@@ -37,8 +37,10 @@
 import express from 'express'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { abrirBanco, caminhoDoBanco, criarAcervo } from './src/servidor/banco.js'
+import { abrirBanco, caminhoDoBanco, criarAcervo, criarCota } from './src/servidor/banco.js'
+import { contarJSearch } from './src/servidor/contagem.js'
 import { criarRotasAcervo } from './src/servidor/rotas.js'
+import { criarRotasCota } from './src/servidor/rotasCota.js'
 
 const AQUI = path.dirname(fileURLToPath(import.meta.url))
 const DIST = path.join(AQUI, 'dist')
@@ -155,31 +157,48 @@ function reproxiar(destino) {
  * `listen` acontecia no topo do módulo, importar abria uma porta como efeito
  * colateral — e uma porta ocupada derrubava a suíte por um motivo que não
  * tinha nada a ver com o que estava sendo testado.
+ *
+ * ## Um banco, um handle
+ *
+ * `acervo` e `cota` moram no mesmo arquivo SQLite e precisam do **mesmo**
+ * `DatabaseSync`. Dois handles no mesmo arquivo são as duas réplicas que o
+ * README proíbe, dentro de um processo só.
+ *
+ * A abertura é preguiçosa: um teste que injeta os dois nunca toca o disco. Um
+ * default de parâmetro seria avaliado mesmo com `acervo` e `cota` dados, e
+ * `npm test` voltaria a criar um `acervo.db` no repositório.
  */
-export function criarApp({ acervo = criarAcervo(abrirBanco(caminhoDoBanco())) } = {}) {
+export function criarApp({ banco = null, acervo = null, cota = null } = {}) {
+  let db = banco
+  const oBanco = () => (db ??= abrirBanco(caminhoDoBanco()))
+  const oAcervo = acervo ?? criarAcervo(oBanco())
+  const aCota = cota ?? criarCota(oBanco())
+
   const app = express()
 
   for (const destino of DESTINOS) {
     app.use(
       destino.de,
-      // Sem interpretar: o corpo é repassado byte a byte. Um `express.json()`
-      // aqui reserializaria o pedido da Claude e mudaria o que o upstream vê.
+      // Só a JSearch tem cota de 200/mês. A Claude é cobrada por token e tem
+      // o próprio medidor, no `custo.js`.
+      ...(destino.nome === 'jsearch' ? [contarJSearch(aCota)] : []),
       express.raw({ type: () => true, limit: '10mb' }),
       reproxiar(destino),
     )
   }
 
   /**
-   * O acervo compartilhado.
+   * O acervo e a cota compartilhados.
    *
-   * Vem antes do estático porque `express.static` responderia 404 a
-   * `/api/acervo` antes de qualquer rota registrada depois dele.
+   * Vêm antes do estático porque `express.static` responderia 404 a
+   * `/api/acervo` e `/api/cota` antes de qualquer rota registrada depois dele.
    *
-   * As rotas em si moram no `src/servidor/rotas.js`, e não aqui, porque o dev
-   * server do vite monta exatamente as mesmas — duas cópias seriam duas
-   * chances de o `npm run dev` e o Railway divergirem.
+   * As rotas em si moram em `src/servidor/rotas.js` e `src/servidor/rotasCota.js`,
+   * e não aqui, porque o dev server do vite monta exatamente as mesmas — duas
+   * cópias seriam duas chances de o `npm run dev` e o Railway divergirem.
    */
-  app.use('/api/acervo', criarRotasAcervo(acervo))
+  app.use('/api/acervo', criarRotasAcervo(oAcervo))
+  app.use('/api/cota', criarRotasCota(aCota))
 
   app.use(express.static(DIST))
 

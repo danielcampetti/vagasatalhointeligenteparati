@@ -6,7 +6,7 @@ import { createServer } from 'node:http'
 import { connect } from 'node:net'
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { criarApp } from '../../server.js'
-import { abrirBanco, criarAcervo } from './banco'
+import { abrirBanco, criarAcervo, criarCota } from './banco'
 
 /**
  * Uma porta livre agora — o teste precisa falar de uma porta que ele controla.
@@ -72,7 +72,11 @@ describe('criarApp', () => {
 
   test('devolve um app do express, montado', async () => {
     const { criarApp } = await import('../../server.js')
-    const app = criarApp({ acervo: criarAcervo(abrirBanco(':memory:')) })
+    // Um banco em memória para os dois: passar só o acervo faria o `criarApp`
+    // abrir o arquivo de verdade para a cota, e `npm test` criaria um
+    // acervo.db no repositório.
+    const banco = abrirBanco(':memory:')
+    const app = criarApp({ banco, acervo: criarAcervo(banco), cota: criarCota(banco) })
     expect(typeof app.listen).toBe('function')
   })
 })
@@ -85,7 +89,11 @@ describe('reproxiar: upstream inalcançável', () => {
   // Porta 0 = o SO escolhe uma livre, como em rotas.test.js — sem número fixo
   // não há teste que falhe porque outra coisa da máquina ocupou a porta.
   beforeEach(async () => {
-    servidor = criarApp({ acervo: criarAcervo(abrirBanco(':memory:')) }).listen(0)
+    // Um banco em memória para os dois: passar só o acervo faria o `criarApp`
+    // abrir o arquivo de verdade para a cota, e `npm test` criaria um
+    // acervo.db no repositório.
+    const banco = abrirBanco(':memory:')
+    servidor = criarApp({ banco, acervo: criarAcervo(banco), cota: criarCota(banco) }).listen(0)
     await new Promise((ok) => servidor.once('listening', ok))
     base = `http://127.0.0.1:${servidor.address().port}`
     // Guardado para o afterEach devolver o ambiente como estava — sem isto, a
@@ -96,6 +104,10 @@ describe('reproxiar: upstream inalcançável', () => {
 
   afterEach(() => {
     process.env.JSEARCH_API_KEY = chaveOriginal
+    // Sem isto, o `vi.spyOn(globalThis, 'fetch')` do teste abaixo continua de
+    // pé para os testes seguintes deste arquivo — e um fetch que não seja
+    // para este `base` cairia no reject que simula o upstream fora do ar.
+    vi.restoreAllMocks()
     return new Promise((ok) => servidor.close(ok))
   })
 
@@ -123,5 +135,33 @@ describe('reproxiar: upstream inalcançável', () => {
 
     expect(res.status).toBe(502)
     expect(res.headers.get('x-jsearch-proxy')).toBe('sem-resposta')
+  })
+})
+
+describe('a cota está montada no app de produção', () => {
+  let servidor
+  let base
+
+  // Um banco em memória para os três: passar só o acervo faria o `criarApp`
+  // abrir o arquivo de verdade para a cota, e `npm test` criaria um acervo.db
+  // no repositório.
+  beforeEach(async () => {
+    const banco = abrirBanco(':memory:')
+    servidor = criarApp({
+      banco,
+      acervo: criarAcervo(banco),
+      cota: criarCota(banco),
+    }).listen(0)
+    await new Promise((ok) => servidor.once('listening', ok))
+    base = `http://127.0.0.1:${servidor.address().port}`
+  })
+
+  afterEach(() => new Promise((ok) => servidor.close(ok)))
+
+  test('GET /api/cota responde JSON, e não o index.html do catch-all', async () => {
+    const res = await fetch(`${base}/api/cota`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    expect((await res.json()).rede).toBe(0)
   })
 })

@@ -4,7 +4,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from 'vitest'
 import { criarApp } from '../../server.js'
-import { abrirBanco, criarAcervo } from './banco'
+import { abrirBanco, criarAcervo, criarCota } from './banco'
 import { criarRotasAcervo } from './rotas.js'
 
 const vaga = (id, extra = {}) => ({
@@ -25,8 +25,12 @@ let acervo
 // Porta 0 = o SO escolhe uma livre. Sem número fixo não há teste que falhe
 // porque outra coisa da máquina ocupou a porta.
 beforeEach(async () => {
-  acervo = criarAcervo(abrirBanco(':memory:'))
-  servidor = criarApp({ acervo }).listen(0)
+  // Um banco em memória para os dois: passar só o acervo faria o `criarApp`
+  // abrir o arquivo de verdade para a cota, e `npm test` criaria um acervo.db
+  // no repositório.
+  const banco = abrirBanco(':memory:')
+  acervo = criarAcervo(banco)
+  servidor = criarApp({ banco, acervo, cota: criarCota(banco) }).listen(0)
   await new Promise((ok) => servidor.once('listening', ok))
   base = `http://127.0.0.1:${servidor.address().port}`
 })

@@ -363,9 +363,9 @@ try {
  * `db` em si. Sem nenhuma referência viva ao `DatabaseSync`, o V8 é livre
  * para coletá-lo a qualquer momento, e o `node:sqlite` finaliza os statements
  * junto: toda operação seguinte lança "statement has been finalized". Em
- * produção (`criarApp({ acervo = criarAcervo(abrirBanco(BANCO_CAMINHO)) })`,
- * sem nenhuma variável segurando o `db`) isso é 500 em todas as rotas até o
- * processo reiniciar. Reproduzido em 03/09/2026 com `node --expose-gc`.
+ * produção (`criarApp()`, que abre o `db` só por dentro do `oBanco()`
+ * preguiçoso e não guarda outra referência) isso é 500 em todas as rotas até
+ * o processo reiniciar. Reproduzido em 03/09/2026 com `node --expose-gc`.
  *
  * `fechar` no objeto devolvido resolve isso sem ser um hack disfarçado de
  * comentário: o motivo de existir é fechar sobre `db`, e isso por si só —
