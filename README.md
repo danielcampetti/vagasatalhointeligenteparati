@@ -524,13 +524,14 @@ São dois destinos, e eles servem para coisas diferentes.
 ### Railway — a versão que funciona
 
 `npm start` roda o `server.js`, que serve o `dist/` e reproxia as APIs. O
-Railway precisa de duas variáveis de ambiente:
+Railway usa estas variáveis de ambiente:
 
 ```
 JSEARCH_API_KEY     a mesma do .env
 ANTHROPIC_API_KEY   a mesma do .env
 BASE_PATH=/         no build
 BANCO_CAMINHO       /dados/acervo.db — o acervo compartilhado
+CONTROLE_SEGREDO    opcional — tranca "Zerar" e "Ajustar" na aba Controle
 ```
 
 `BASE_PATH` é o que impede a página abrir sem CSS. O padrão do `vite.config.js`
@@ -538,6 +539,18 @@ BANCO_CAMINHO       /dados/acervo.db — o acervo compartilhado
 Railway o app tem o domínio inteiro para si e precisa de `/`. Errar isso faz o
 HTML pedir os assets no lugar errado e receber 404 — o mesmo defeito nos dois
 destinos, em direções opostas.
+
+`CONTROLE_SEGREDO` é a única das cinco que é **opcional**, e de propósito:
+ausente — o caso do `npm run dev`, e de quem clona o repositório sem nunca ter
+ouvido falar dela —, "Zerar" e "Ajustar" na aba Controle ficam abertos. É o que
+evita que a variável existir no Railway obrigue quem só está rodando local a
+passar a digitar senha por algo que só faz sentido lá. Definida, as duas rotas
+passam a exigir o mesmo valor no header `x-controle-segredo`, e respondem 403
+sem ele — são as únicas que mudam o número gravado, e mudá-lo é decisão do
+dono da conta. Ler a cota (`GET /api/cota`, o que a aba Controle consulta o
+tempo todo) nunca pede segredo nenhum: ler não estraga nada, e trancar a
+leitura esconderia do painel a própria informação que ele existe para
+mostrar.
 
 #### O volume do acervo
 

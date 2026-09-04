@@ -13,48 +13,118 @@ funcionam*; este arquivo diz *em que pé estão* e *o que fazer a seguir*.
 
 ## Onde estamos agora — 04/09/2026
 
-**O app está no ar, e o banco sobreviveu ao primeiro deploy.**
+**O app está no ar, o banco sobreviveu ao primeiro deploy, e a cota da JSearch
+saiu do navegador.**
 `https://vagas-atalho-inteligente-para-ti.up.railway.app`
 
-Medido hoje: `GET /api/acervo` responde 200 com a linha `prova1`, gravada ontem
-às 23:47. O volume persistiu — era a dúvida que ficou de ontem, e ela está
-respondida.
+Duas frentes hoje, cada uma com uma investigação e uma correção — o detalhe
+completo está nas duas entradas abaixo.
 
-Hoje teve uma investigação, a ferramenta que a destravou, e a correção:
+**1. A tela branca da aba Banco de Dados** tinha causa: `vaga.techs.map(...)`
+na `Linha`, contra a vaga `prova1` (gravada ontem por um `curl` de teste, sem
+`techs`). Corrigida com `Array.isArray`, e um `LimiteDeErro` novo garante que a
+próxima tela branca — desta aba ou de qualquer outra — escreva o próprio nome
+em vez de ficar muda.
 
-**1. A aba Banco de Dados virou uma página inteiramente branca** no navegador do
-dono — sem menu lateral, sem mensagem. Não reproduziu em lugar nenhum: nem em
-navegador limpo, nem com 40 vagas antigas no `localStorage` para forçar a
-migração, nem em tela estreita, nem no bundle publicado, que foi conferido
-contra o `main` (hash `index-DPViLuf2.js` nos dois, compilando com
-`BASE_PATH=/`). Em janela anônima o app funcionou.
+**2. A cota da JSearch passou a ser contada pelo servidor, não pelo
+navegador.** As 200 do mês são da **conta** na OpenWeb Ninja, não de quem abriu
+o app, e o contador antigo — no `localStorage` — media o navegador quando
+devia medir a conta. Agora quem conta é o proxy que já fazia toda requisição
+(`server.js` no Railway, `pluginServidor.js` sob `npm run dev`), pela mesma
+razão que tirou o acervo do navegador ontem: é o único lugar por onde toda
+requisição passa e que nenhuma aba fechada ou navegador diferente consegue
+burlar. Verificado por HTTP nos dois modos — sem abrir navegador, e sem gastar
+nenhuma das 200 de verdade.
 
-**2. O limite de erro, para a tela branca dizer o que é.** Um React sem limite
-desmonta a árvore inteira quando o render lança, e o que sobra é o `<body>`
-vazio: a mesma tela para erro de dado, extensão e defeito de código. O
-`LimiteDeErro` troca isso por um cartão com a mensagem escrita, o menu lateral
-vivo do lado, e a pilha de componentes no console.
+Testes: **450** (eram 407 no começo do dia). Lint limpo fora do aviso
+pré-existente em `perfil.test.js`. Build OK.
 
-**3. A causa apareceu no minuto seguinte ao deploy do limite** — e apareceu no
-meu navegador, não no do dono. `TypeError: Cannot read properties of undefined
-(reading 'map')`, em `App.jsx`: a `Linha` da tabela fazia `vaga.techs.map(...)`,
-e a vaga `prova1` — gravada ontem no volume por um `curl` de teste — não tem
-`techs`. Uma vaga sem um campo derrubava a aba inteira.
+**O trabalho a seguir é do dono, e mexe em ambiente publicado — fora deste
+worktree:** `railway variables --set CONTROLE_SEGREDO=<senha>`, o `git push`,
+e depois do deploy, um clique em "Ajustar" na aba Controle com o número que o
+painel da OpenWeb Ninja mostra — é a migração inteira, porque o contador de
+cada navegador era palpite e o número certo já tem dono. Falta também
+confirmar que a aba Banco de Dados abre no navegador dele; se ainda quebrar,
+agora a tela diz o quê.
 
-O que fez isso escapar de tudo foi a **largura da janela**: abaixo do corte o
-app desenha cartões, que não mostram techs, e foi em janela estreita que as
-reproduções da manhã rodaram. "Não reproduz" era "não reproduz nesta largura".
+---
 
-Corrigido em `Linha` com `Array.isArray`, e não com `?? []`: o acervo é público,
-aceita qualquer POST e não tem DELETE, então a tela desenha **o que está
-guardado**, não o que o `mapear.js` promete — e a vaga que a derrubava não pode
-ser apagada.
+## 04/09 (2) — a cota saiu do navegador, e quem faz a chamada passou a contar
 
-Testes: **407** (eram 398). Lint limpo fora do aviso pré-existente em
-`perfil.test.js`. Build OK.
+Pedido: as 200 requisições mensais da JSearch são da **conta** na OpenWeb
+Ninja — debitadas não importa de onde o pedido saiu —, e o contador vivia no
+`localStorage`, que é de um **navegador**. O próprio `cota.js`, antes de
+qualquer linha deste trabalho mudar, já dizia isso:
 
-**O trabalho a seguir:** confirmar com o dono que a aba abre no navegador dele.
-Se ainda quebrar, agora a tela diz o quê — era esse o buraco.
+> Nem com a contagem certa este número é a cota: as 200 são da conta na OpenWeb
+> Ninja, e o `localStorage` é de um navegador e de uma origem. Buscar pelo app
+> publicado e pelo `npm run dev` debita as mesmas 200 e alimenta dois
+> contadores diferentes, nenhum dos dois sabendo do outro.
+
+Executado como plano de oito tarefas com subagentes, cada uma com revisão
+própria — a mesma disciplina do acervo em 03/09. Spec e plano em
+`docs/superpowers/`.
+
+**Quem passou a contar é o proxy, não mais um POST do cliente.** Todo pedido à
+JSearch já atravessava o `server.js` em produção ou o `server.proxy` do vite no
+`npm run dev` — é o único ponto que não pode ser burlado (não há como pedir a
+JSearch direto do navegador sem CORS) nem perdido (uma aba fechada no meio de
+uma busca não perde a contagem, porque quem conta não é a aba). `contagem.js`
+registra um listener em `res.on('finish')` e olha só o `res.statusCode` — o que
+os dois proxies, que não têm nada em comum por dentro (um `fetch` que vira
+buffer, um `http-proxy` que faz pipe), produzem igual.
+
+**O marcador `sem-resposta`, e por que a regra precisava dele.** A regra do que
+consome cota já existia no `jsearch.js` do cliente (`!guardaLocal &&
+res.status !== 401`) e não mudou de sentido, só de lugar: conta tudo que a API
+respondeu, exceto 401; não conta o que nunca saiu da máquina. O problema é que
+um upstream inalcançável e um 502 vindo da própria JSearch chegam ao middleware
+como o **mesmo** 502 — sem diferença nenhuma no `res` para olhar. Sem um jeito
+de separá-los, `contarJSearch` creditaria cota gasta numa requisição que nunca
+saiu daqui. `sem-resposta` é esse jeito: o `catch` do `reproxiar` (produção) e o
+`proxy.on('error')` do vite (dev) passaram a pôr esse header, ao lado do
+`sem-chave` que já existia, e os dois fazem `consomeCota` devolver `false`.
+
+**O cache fica onde estava.** `cota.js` encolheu — perdeu `totais.rede`,
+`desde`, `usos`, `zerarContagem`, `ajustarContagem` —, mas o cache de consultas
+e o contador de repetições que ele economiza continuam no `localStorage`. A
+razão está no cabeçalho novo do módulo: o cache é uma ideia de **sessão**, não
+de conta — o que está guardado é o recorte exato de uma busca, com o cursor
+dela, e não se reaproveita entre pessoas que perguntaram coisas diferentes.
+Compartilhá-lo seria caro (vagas inteiras, com descrição), pelo mesmo peso que
+o `GET /api/acervo` já evita não mandando `descricao`.
+
+**`CONTROLE_SEGREDO` tranca só as duas rotas que escrevem.** "Zerar" e
+"Ajustar" são as únicas escritas que o cliente manda para a cota, e são
+destrutivas num app público sem login — zerar o contador é um estrago que
+ninguém desfaz, porque o número certo só existe no painel do provedor. Com a
+variável ausente (o caso do `npm run dev`, e de quem clona o repositório sem
+nunca ter ouvido falar dela) as duas ficam abertas: é o que impede a variável
+existir no Railway e passar a exigir senha também de quem só está rodando
+local. `GET /api/cota` nunca pede segredo — ler não estraga nada, e trancar a
+leitura esconderia do painel a própria informação que ele existe para mostrar.
+
+**Verificado nos dois modos, por HTTP — sem navegador, e sem tocar a API real
+da JSearch.** Não há `.env` neste worktree, então não havia como uma chave
+escapar e gastar uma das 200; toda checagem foi só em `/api/cota`. Nos dois
+modos, `GET /api/cota` devolveu as quatro chaves prometidas
+(`{"desde":...,"rede":0,"usos":[],"protegido":false}`); sem `CONTROLE_SEGREDO`
+no ambiente, `POST /api/cota/zerar` respondeu 200; com a variável definida, a
+mesma rota respondeu 403 sem o header e 200 com ele. `npm run dev` (porta 5173,
+`pluginServidor.js`) e produção local (`MSYS_NO_PATHCONV=1 BASE_PATH=/ npm run
+build` + `node server.js` na porta 3010, `BANCO_CAMINHO` num arquivo fora do
+repositório, em `%TEMP%`) bateram igual nas quatro checagens — a promessa de
+dev e Railway se comportarem igual, medida de novo, desta vez na cota. Os dois
+bancos de teste (o `acervo.db` que o dev cria por padrão e o arquivo em
+`%TEMP%` da produção local) foram apagados depois.
+
+Testes: **450** (eram 407 antes desta entrada — 24 arquivos viraram 27). Lint
+limpo fora do aviso pré-existente em `perfil.test.js`. Build OK.
+
+**O que fica para o dono, fora deste worktree — o README já documenta a
+variável:** `railway variables --set CONTROLE_SEGREDO=<senha>`, o `git push
+origin main`, e depois do deploy um clique em "Ajustar" na aba Controle com o
+número que o painel da OpenWeb Ninja mostra.
 
 ---
 
@@ -793,7 +863,7 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 | Sem filtros sobre o resultado — **exceto data** | Tecnologia, empresa, modalidade e status foram removidos de propósito. A **janela de publicação** entrou em 02/09 e é a única exceção: ela não é conveniência de tela, é o remédio para as duas queixas de vaga encerrada e vaga velha, e o corte precisa acontecer também no cliente porque a API não honra `week` |
 | Status entra como "Ativa" — **mas saiu da listagem em 02/09** | O valor continua no dado e na página de detalhe, pelo motivo de sempre: veio de uma busca agora, e "Em análise"/"Encerrada" são estados do processo seletivo, sem fonte na API. O que mudou é o lugar dele na tabela: como a API não tem campo de expiração, *toda* linha mostrava a mesma pílula verde — uma coluna constante. O espaço virou o "Ver Vaga" |
 | Sem router | Abas são estado local. A página de detalhe usa `pushState` sem trocar a URL — recarregar em `/vaga/123` daria 404 no Pages |
-| Cota no `localStorage` | Uma cota mensal que zera no F5 não controla nada |
+| ~~Cota no `localStorage`~~ — **revisto em 04/09** | Era: uma cota mensal que zera no F5 não controla nada. Caiu porque o defeito é pior que isso: as 200 são da **conta** na OpenWeb Ninja, e um contador por navegador é um contador que não sabe do irmão que roda em outra aba ou no `npm run dev`. Contar migrou para o proxy do servidor — o único lugar por onde toda requisição passa. Ficou no `localStorage` só o que é mesmo do navegador: o cache de buscas repetidas |
 | As 58 vagas de mock foram apagadas | Com mock dentro não dá para saber se a API está funcionando |
 | Modelo é `claude-sonnet-5`, não `claude-opus-5` | Custo questionado depois de decidido: US$ 2/US$ 10 por 1M de tokens contra US$ 5/US$ 25 do Opus. `src/custo.js` guarda os dois preços — o do Opus fica de referência histórica, não é mais usado. **Preço reconferido na fonte oficial em 02/09**: o aumento para US$ 3/US$ 15 que estava marcado para 01/09/2026 não aconteceu |
 | O ranking roda em `effort: 'medium'` | Decidido em 02/09 depois de medir. Sem `effort` explícito o padrão da API é `high`, e ~90% do que era gerado era pensamento — 27s de espera para uma resposta de 250 tokens. `low` seria 5× mais rápido mas diverge o dobro do ruído e perde o pódio inteiro; `medium` corta quase metade do tempo e do custo assumindo metade do desvio. Vale só para o ranking: perfil e justificativa não foram medidos |
@@ -1235,9 +1305,11 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
   Quem separa é a linha do console: `NotFoundError ... removeChild` é extensão
   mexendo no DOM; `TypeError` apontando para o bundle é código.
 - **Nunca mande limpar dados do site para consertar tela.** `vagas:cota` é o
-  contador das 200 do mês e `vagas:cv` é o currículo — os dois moram na mesma
-  origem que o acervo. Apagar tudo troca um defeito de tela por perda de dado
-  que ninguém consegue reconstruir. Remova a chave suspeita, uma por vez, depois
+  cache de buscas repetidas (o contador das 200 do mês é do servidor desde
+  04/09; ver a entrada "a cota saiu do navegador") e `vagas:cv` é o currículo —
+  os dois moram na mesma origem que o acervo. Apagar tudo troca um defeito de
+  tela por perda de dado que ninguém consegue reconstruir. Remova a chave
+  suspeita, uma por vez, depois
   de baixar um backup.
 - **Para conferir o que está publicado, compile com a mesma `base`.** O bundle
   do Railway e o do GitHub Pages saem do mesmo código com hashes diferentes,
@@ -1257,7 +1329,7 @@ por `git log`, apesar de documentação anterior sugerir o contrário sobre a 6.
 
 ```bash
 npm run dev        # a busca e a Avaliação IA só funcionam aqui — porta 5173, caminho /vagasatalhointeligenteparati/
-npm test           # vitest — 407 testes, 24 arquivos
+npm test           # vitest — 450 testes, 27 arquivos
 npm run lint       # oxlint (não pega no-undef hoje; veja a pendência 6)
 npm run build      # gera dist/
 npm run cidades    # regenera src/data/cidades.js a partir do IBGE
