@@ -1575,7 +1575,10 @@ function LinkDaVaga({ link, rotulo = null }) {
   )
 }
 
-function Linha({ vaga, menuAberto, onMenu, onAbrir }) {
+// Exportada para o teste. É a única linha da tabela, e a vaga que ela recebe
+// vem do acervo — que é público, aceita qualquer POST e não tem DELETE. O que
+// ela sabe ou não desenhar precisa de gate próprio.
+export function Linha({ vaga, menuAberto, onMenu, onAbrir }) {
   const d = derivar(vaga)
   const itemMenu = {
     width: '100%',
@@ -1640,7 +1643,12 @@ function Linha({ vaga, menuAberto, onMenu, onAbrir }) {
         <div
           style={{ display: 'flex', flexWrap: 'wrap', gap: 10, marginTop: 5 }}
         >
-          {vaga.techs.map((t) => (
+          {/* `Array.isArray` e não `?? []`: o acervo é público, aceita
+              qualquer POST e não tem DELETE, então a linha desenha o que está
+              guardado — não o que o `mapear.js` promete. Foi um `techs`
+              ausente, gravado por um `curl` de teste, que apagou esta tela em
+              04/09; uma string faria o mesmo, e `?? []` não a pega. */}
+          {(Array.isArray(vaga.techs) ? vaga.techs : []).map((t) => (
             <span key={t} style={{ fontSize: 11.5, color: '#7C8699' }}>
               {t}
             </span>
