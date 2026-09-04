@@ -1,8 +1,6 @@
 import { beforeEach, describe, expect, test } from 'vitest'
 import {
   PAGINA_LEGADA,
-  TETO_HISTORICO,
-  ajustarContagem,
   consultarCache,
   lerCota,
   limparCache,
@@ -10,8 +8,6 @@ import {
   proximaPagina,
   registrarUso,
   servidasDoCache,
-  usadas,
-  zerarContagem,
 } from './cota'
 import { JANELA_PADRAO } from './janela'
 
@@ -284,19 +280,21 @@ describe('cache paginado', () => {
 })
 
 /**
- * O defeito que este bloco tranca foi visto em produção: o painel Controle
- * mostrava **3 / 200** quando a conta na OpenWeb Ninja já tinha gasto 50.
+ * O contador de repetições — a única contagem que sobrou neste módulo.
  *
- * A contagem saía de `usos`, que é o histórico da tela — e o histórico é
- * cortado nas últimas entradas. Como busca servida do cache entra na mesma
- * lista que busca de rede, cada repetição empurrava uma requisição paga para
- * fora do corte. O número não só errava: **encolhia sozinho**, e encolhia
- * justamente quando o app fazia a coisa certa (servir do cache).
+ * A contagem de rede saiu daqui: as 200 são da conta, e agora quem conta é
+ * quem faz a requisição (`servidor/contagem.js`). Ficou o número que é mesmo
+ * deste navegador, porque o cache é deste navegador: quantas vezes ele
+ * respondeu no lugar da rede.
  *
- * A correção separa as duas coisas que estavam na mesma lista: `usos`
- * continua sendo a tela, com teto; `totais` é a contagem, e não tem teto.
+ * Ele herda a propriedade que um defeito de produção ensinou a exigir. O
+ * painel já mostrou **3 / 200** com 50 requisições gastas, porque a contagem
+ * era feita filtrando `usos` — o histórico da tela, que tem teto. Cada
+ * repetição servida do cache empurrava uma requisição paga para fora do
+ * corte: o número encolhia sozinho, e encolhia quando o app acertava. Por
+ * isso o que resta é um total incrementado, e nunca uma lista recontada.
  */
-describe('a contagem não sai do histórico cortado', () => {
+describe('as repetições que o cache poupou', () => {
   const encher = (origem, quantas, prefixo = 't') => {
     for (let i = 0; i < quantas; i++) {
       registrarUso(`${prefixo}${i}`, 'Caxias do Sul, RS', origem, {
@@ -305,121 +303,84 @@ describe('a contagem não sai do histórico cortado', () => {
     }
   }
 
-  // O caso exato de produção: 50 pagas, depois repetições que couberam no
-  // cache. Antes desta correção o painel dizia 3.
-  test('50 de rede seguidas de repetições do cache continuam contando 50', () => {
-    encher('rede', 50)
-    encher('cache', 47, 'r')
-
-    expect(usadas(lerCota())).toBe(50)
-  })
-
-  test('o histórico para no teto, a contagem passa dele', () => {
-    encher('rede', 60)
-
-    const cota = lerCota()
-    expect(cota.usos).toHaveLength(TETO_HISTORICO)
-    expect(usadas(cota)).toBe(60)
-  })
-
-  test('o mesmo vale para as buscas servidas do cache', () => {
+  // 70 passa de qualquer teto de histórico que já existiu aqui: é a garantia
+  // de que o número não vem de uma lista cortada.
+  test('conta todas as repetições, muito além do que um histórico guardaria', () => {
     encher('rede', 1)
     encher('cache', 70, 'r')
 
     expect(servidasDoCache(lerCota())).toBe(70)
   })
 
-  // Consulta vazia não é requisição, e continua não sendo contada.
-  test('consulta sem cargo e sem cidade não entra na contagem', () => {
-    registrarUso('  ', '  ', 'rede', { vagas: VAGAS })
-    expect(usadas(lerCota())).toBe(0)
-  })
-
-  test('zerar a contagem zera os totais, não só o histórico', () => {
+  // O contador é do cache e só do cache. Requisição de rede é do servidor.
+  test('busca de rede não entra neste contador', () => {
     encher('rede', 60)
-    zerarContagem()
 
-    const cota = lerCota()
-    expect(usadas(cota)).toBe(0)
-    expect(servidasDoCache(cota)).toBe(0)
-    expect(cota.usos).toEqual([])
+    expect(servidasDoCache(lerCota())).toBe(0)
   })
 
-  // Quem já tinha cota gravada antes dos totais existirem não pode voltar a
-  // zero no primeiro deploy. O histórico subconta — é o defeito inteiro —,
-  // mas continuar de onde ele parou é melhor que jogar fora o que ele sabe.
-  test('cota gravada antes dos totais deriva a contagem do histórico', () => {
+  // Consulta vazia não é requisição, e continua não registrando nada.
+  test('consulta sem cargo e sem cidade não conta repetição', () => {
+    registrarUso('  ', '  ', 'cache')
+
+    expect(servidasDoCache(lerCota())).toBe(0)
+  })
+
+  test('total adulterado vira zero em vez de derrubar a tela', () => {
+    localStorage.setItem(
+      'vagas:cota',
+      JSON.stringify({ cache: {}, totais: { cache: 'muitas' } }),
+    )
+
+    expect(servidasDoCache(lerCota())).toBe(0)
+  })
+
+  /**
+   * Cota gravada pela versão anterior traz `desde`, `usos` e `totais.rede`.
+   * Nada disso é lido mais, e nada disso pode derrubar a leitura — porque no
+   * mesmo objeto está o cache, que é o conteúdo caro: cada entrada dele
+   * representa uma das 200 já paga.
+   */
+  test('cota do formato antigo é lida sem o que saiu, e o cache sobrevive', () => {
     localStorage.setItem(
       'vagas:cota',
       JSON.stringify({
         desde: '2026-08-26T12:00:00.000Z',
-        cache: {},
-        usos: [
-          { chave: 'a|b|month', origem: 'rede', quando: 'z' },
-          { chave: 'a|b|month', origem: 'rede', quando: 'z' },
-          { chave: 'a|b|month', origem: 'cache', quando: 'z' },
-        ],
+        usos: [{ chave: 'x|y|month', origem: 'rede', quando: 'z' }],
+        totais: { rede: 42, cache: 3 },
+        cache: { 'x|y|month': { vagas: VAGAS, cursor: 'C1', paginas: [1] } },
       }),
     )
 
-    const cota = lerCota()
-    expect(usadas(cota)).toBe(2)
-    expect(servidasDoCache(cota)).toBe(1)
-  })
-
-  test('totais adulterados caem no histórico em vez de derrubar a tela', () => {
-    localStorage.setItem(
-      'vagas:cota',
-      JSON.stringify({
-        desde: null,
-        cache: {},
-        usos: [{ chave: 'a|b|month', origem: 'rede', quando: 'z' }],
-        totais: { rede: -7, cache: 'muitas' },
-      }),
-    )
-
-    const cota = lerCota()
-    expect(usadas(cota)).toBe(1)
-    expect(servidasDoCache(cota)).toBe(0)
-  })
-})
-
-/**
- * `ajustarContagem` existe porque o número verdadeiro não mora aqui.
- *
- * A cota é da **conta** na OpenWeb Ninja; este contador é do **navegador**.
- * Abrir o app publicado num celular, ou trocar de máquina, começa a contar do
- * zero enquanto o provedor continua debitando das mesmas 200 — e não há como
- * o app descobrir sozinho o que foi gasto de outro lugar. O painel do
- * provedor sabe; este botão é como esse número entra.
- */
-describe('ajustar a contagem para o número do provedor', () => {
-  test('põe a contagem no valor informado', () => {
-    registrarUso('x', 'y', 'rede', { vagas: VAGAS })
-    ajustarContagem(50)
-
-    expect(usadas(lerCota())).toBe(50)
-  })
-
-  test('ajustar não descarta o cache — as repetições seguem de graça', () => {
-    registrarUso('x', 'y', 'rede', { vagas: VAGAS, cursor: 'C1' })
-    ajustarContagem(50)
-
+    expect(servidasDoCache(lerCota())).toBe(3)
     expect(consultarCache('x', 'y').cursor).toBe('C1')
   })
 
-  test('a contagem ajustada continua subindo com as buscas seguintes', () => {
-    ajustarContagem(50)
-    registrarUso('x', 'y', 'rede', { vagas: VAGAS })
+  /**
+   * E uma cota anterior aos `totais` volta a zero, de propósito.
+   *
+   * Havia aqui uma derivação a partir do `usos` legado. Ela morreu com o
+   * campo: manter este módulo conhecendo um formato que ele deixou de
+   * escrever, só para acertar uma estatística de economia que não paga nada,
+   * custaria mais do que vale. O cache, que é o que custa, continua inteiro.
+   */
+  test('cota sem totais começa o contador do zero, mas não perde o cache', () => {
+    localStorage.setItem(
+      'vagas:cota',
+      JSON.stringify({
+        usos: [{ chave: 'x|y|month', origem: 'cache', quando: 'z' }],
+        cache: { 'x|y|month': { vagas: VAGAS, cursor: 'C1', paginas: [1] } },
+      }),
+    )
 
-    expect(usadas(lerCota())).toBe(51)
+    expect(servidasDoCache(lerCota())).toBe(0)
+    expect(consultarCache('x', 'y').cursor).toBe('C1')
   })
 
-  test('valor negativo ou sem sentido não vira contagem', () => {
-    ajustarContagem(7)
-    ajustarContagem(-3)
-    ajustarContagem('cinquenta')
+  test('limpar o cache não zera o que ele já poupou', () => {
+    encher('cache', 4, 'r')
+    limparCache()
 
-    expect(usadas(lerCota())).toBe(7)
+    expect(servidasDoCache(lerCota())).toBe(4)
   })
 })

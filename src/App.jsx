@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { BANCO_DE_VAGAS, INSTRUCAO_PADRAO, MODALIDADES } from './data/vagas'
 import {
   LIMITE_MENSAL,
-  ajustarContagem,
   chaveDaConsulta,
   consultarCache,
   paginasDoCache,
@@ -11,9 +10,8 @@ import {
   limparCache,
   registrarUso,
   servidasDoCache,
-  usadas,
-  zerarContagem,
 } from './cota'
+import { ajustarRemoto, lerCotaRemota, zerarRemoto } from './cotaRemota'
 import { mensagemDoErro, TIPOS } from './api/claude'
 import {
   ErroJSearch,
@@ -2714,29 +2712,64 @@ function PaginaVaga({ vaga, onVoltar, cv, instrucao, onCusto, ranqueando }) {
 }
 
 /**
+ * A requisição trouxe resposta útil, ou queimou uma das 200 em erro?
+ *
+ * A regra do que *debita* mora no servidor (`contagem.js`), e não aqui: toda
+ * linha que chegou já foi cobrada. Esta é só a leitura da linha — 2xx é o que
+ * valeu; 4xx e 5xx são cota gasta sem retorno, e é isso que o ponto vermelho
+ * conta a quem olha.
+ */
+function respondeuBem(status) {
+  return Number(status) >= 200 && Number(status) < 300
+}
+
+/**
  * Aba Controle: quanto da cota mensal da JSearch já foi gasto.
  *
- * O número é real desde que a busca passou a sair para a rede — e é por isso
- * que ele precisa estar certo. Já esteve errado: contado a partir do histórico
- * da tela, que tem teto, o painel mostrava 3 requisições com 50 gastas na
- * conta. A contagem hoje vem de `totais`, no `cota.js`, que não é cortado.
+ * O número é da **conta**, e por isso ele vem do servidor. Já foi do
+ * `localStorage`, e as duas versões desse arranjo estavam erradas: primeiro
+ * contado a partir do histórico da tela, que tem teto, mostrando 3
+ * requisições com 50 gastas; depois com a contagem certa mas presa a uma
+ * origem, ignorando o que o app publicado, o celular e o `npm run dev`
+ * debitavam das mesmas 200. Hoje quem conta é quem faz a requisição — o
+ * middleware do `contagem.js`, no servidor —, e o painel só lê.
  *
- * O que ele ainda não consegue saber sozinho é o que foi gasto de outro
- * navegador — a cota é da conta, o `localStorage` é da origem. Daí o
- * "Ajustar": o painel do provedor é a fonte, e este botão é a entrada dela.
+ * A consequência que atravessa este componente é que o número **pode não
+ * chegar**: são os três estados abaixo, os mesmos do `AcervoVazio` e pela
+ * mesma razão. Aqui ela é mais cara, e é o motivo de o `cotaRemota.js`
+ * existir: acervo vazio por queda de rede aconselha "faça uma busca"; cota
+ * zerada por queda de rede diz "você tem as 200 inteiras" para quem já gastou
+ * 180, e quem acreditar gasta dinheiro.
+ *
+ * `doCache` chega por prop e não sai de `cota`: as repetições que o cache
+ * poupou são deste navegador, porque o cache é deste navegador (ver
+ * `cota.js`). São duas contagens com donos diferentes no mesmo painel.
  */
-function PainelControle({
+export function PainelControle({
   cota,
+  estado,
+  erro,
+  onTentarDeNovo,
+  doCache,
   onZerar,
   onAjustar,
   onLimparCache,
   custo,
   onZerarCusto,
+  segredo,
+  onSegredo,
 }) {
-  const gastas = usadas(cota)
-  const doCache = servidasDoCache(cota)
+  const gastas = cota.rede
   const restantes = Math.max(0, LIMITE_MENSAL - gastas)
   const fracao = gastas / LIMITE_MENSAL
+  /**
+   * O histórico chega pela rede, e um `.map` em algo que não é lista derruba
+   * a aba inteira — foi assim que o Banco de Dados virou página branca (ver
+   * `App.test.jsx`). O `cotaRemota.js` garante que veio JSON; não garante que
+   * veio no formato, e um servidor em atualização é justamente quando o
+   * painel mais precisa desenhar.
+   */
+  const usos = Array.isArray(cota.usos) ? cota.usos : []
 
   /**
    * O campo de ajuste, aberto ou fechado.
@@ -2784,6 +2817,35 @@ function PainelControle({
     letterSpacing: '0.09em',
     textTransform: 'uppercase',
     color: '#7C8699',
+  }
+
+  // Falha de rede não pode virar 0/200 — ver o docstring do `cotaRemota.js`.
+  // O `cota` em estado nasce com `rede: 0`, então desenhar o cartão antes de a
+  // resposta chegar mostraria as 200 inteiras disponíveis a quem talvez tenha
+  // 20. Depois de todos os hooks, para a saída antecipada não mudar a ordem
+  // deles entre um render e o seguinte.
+  if (estado !== 'pronto') {
+    return (
+      <div style={{ padding: '64px 20px', textAlign: 'center' }}>
+        <div style={{ fontSize: 15, fontWeight: 600 }}>
+          {estado === 'carregando' ? 'Lendo a cota…' : 'Não consegui ler a cota'}
+        </div>
+        {estado === 'falhou' && (
+          <div style={{ fontSize: 13, color: '#8A94A6', marginTop: 10 }}>
+            A contagem vive no servidor, e ele não respondeu. {erro}
+            <div style={{ marginTop: 12 }}>
+              <button
+                onClick={onTentarDeNovo}
+                className="bg-[#0E1729] text-[#C8D1E0] hover:bg-[#152039]"
+                style={botao}
+              >
+                Tentar de novo
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    )
   }
 
   return (
@@ -2880,6 +2942,65 @@ function PainelControle({
           )}
         </div>
 
+        {/* O erro que não derruba o painel.
+            "Zerar" e "Ajustar" também vão à rede, e o 403 da senha errada é o
+            caso comum. Falhar neles deixa o número como estava — que é um
+            estado honesto, e por isso o painel continua 'pronto' em vez de
+            virar a tela de falha. Mas precisa aparecer: sem esta linha,
+            apertar "Zerar contagem" com a senha errada não faz nada visível, e
+            o dono conclui que zerou. */}
+        {erro && (
+          <div
+            style={{
+              fontSize: 13,
+              color: '#F0A0A0',
+              background: 'rgba(248,113,113,0.08)',
+              border: '1px solid rgba(248,113,113,0.22)',
+              borderRadius: 9,
+              padding: '9px 12px',
+              marginBottom: 14,
+            }}
+          >
+            {erro}
+          </div>
+        )}
+
+        {/* A senha do controle, e só quando o servidor pede uma.
+            `protegido` é um booleano que a rota de leitura devolve: ele diz se
+            há segredo configurado, e nada sobre qual é. Mostrar o campo num
+            servidor aberto — o `npm run dev`, por exemplo — pediria uma senha
+            que não existe e que ninguém saberia inventar. */}
+        {cota.protegido && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 10,
+              flexWrap: 'wrap',
+              marginBottom: 14,
+            }}
+          >
+            <input
+              type="password"
+              value={segredo}
+              onChange={(e) => onSegredo(e.target.value)}
+              placeholder="Senha do controle"
+              aria-label="Senha do controle"
+              className="bg-[#0B1220] text-[#E8ECF4]"
+              style={{
+                width: 200,
+                padding: '8px 10px',
+                borderRadius: 9,
+                border: '1px solid rgba(255,255,255,0.12)',
+                fontSize: 13,
+              }}
+            />
+            <span style={{ fontSize: 12.5, color: '#7C8699' }}>
+              Zerar e ajustar são do dono da conta. Ler o número não pede senha.
+            </span>
+          </div>
+        )}
+
         {/* Um traço por requisição do mês: dá para ver quanto sobra sem ler
             o número. */}
         <div
@@ -2912,11 +3033,13 @@ function PainelControle({
           {cota.desde ? `, iniciado em ${fmtDataHora(cota.desde, false)}` : ''}.
           {' '}O plano gratuito renova pela data da assinatura, não pelo dia 1º
           — zere a contagem quando ele virar.
-          {' '}Esta contagem é <strong style={{ color: '#C8D1E0', fontWeight: 600 }}>deste
-          navegador</strong>, mas as 200 são da conta: buscas feitas em outra
-          máquina, em outro navegador ou pelo <code>npm run dev</code> gastam da
-          mesma cota sem aparecer aqui. Quando o painel da OpenWeb Ninja mostrar
-          outro número, é ele que está certo — use "Ajustar" para trazê-lo.
+          {' '}Esta contagem é <strong style={{ color: '#C8D1E0', fontWeight: 600 }}>da
+          conta</strong>, e não deste navegador: quem conta é o servidor, no
+          momento em que a requisição sai. Buscar de outra máquina, do celular
+          ou pelo <code>npm run dev</code> soma no mesmo número. O "Ajustar"
+          continua existindo para o que nem o servidor viu — requisições feitas
+          fora deste app, ou antes de ele passar a contar; quando o painel da
+          OpenWeb Ninja mostrar outro número, é ele que está certo.
         </div>
       </div>
 
@@ -3007,6 +3130,13 @@ function PainelControle({
               ? 'foi 1 requisição economizada.'
               : `foram ${doCache} requisições economizadas.`}{' '}
           Limpar o cache faz as próximas repetições voltarem a consumir.
+          {' '}Ao contrário do número lá em cima, este é{' '}
+          <strong style={{ color: '#C8D1E0', fontWeight: 600 }}>
+            deste navegador
+          </strong>
+          : o cache mora no <code>localStorage</code>, então as vagas que ele
+          guardou e as repetições que ele poupou são de quem está nesta
+          máquina.
         </div>
       </div>
 
@@ -3018,15 +3148,15 @@ function PainelControle({
             borderBottom: '1px solid rgba(255,255,255,0.06)',
           }}
         >
-          Últimas buscas
+          Últimas requisições
         </div>
-        {cota.usos.length === 0 ? (
+        {usos.length === 0 ? (
           <div style={{ padding: '28px 20px', fontSize: 13, color: '#8A94A6' }}>
-            Nenhuma busca registrada. Consultas sem cargo e sem cidade não
-            entram: não haveria requisição a fazer.
+            Nenhuma requisição registrada. O que o cache serviu não aparece
+            aqui: não saiu para a rede, e é por isso que não custou.
           </div>
         ) : (
-          cota.usos.map((u, i) => (
+          usos.map((u, i) => (
             <div
               key={`${u.quando}-${i}`}
               style={{
@@ -3035,24 +3165,39 @@ function PainelControle({
                 gap: 12,
                 padding: '11px 20px',
                 borderBottom:
-                  i === cota.usos.length - 1
+                  i === usos.length - 1
                     ? 'none'
                     : '1px solid rgba(255,255,255,0.04)',
                 fontSize: 13,
               }}
             >
+              {/* O ponto mudou de significado junto com a lista. Ele já
+                  separou rede de cache; agora toda linha é rede — o servidor
+                  só registra o que saiu —, então o que sobra para distinguir
+                  é se a requisição valeu alguma coisa. Verde é resposta boa,
+                  vermelho é uma das 200 gasta em erro, que é o caso que
+                  merece ser visto de longe. */}
               <span
                 style={{
                   flex: '0 0 7px',
                   width: 7,
                   height: 7,
                   borderRadius: 4,
-                  background: u.origem === 'rede' ? '#F87171' : '#60A5FA',
+                  background: respondeuBem(u.status) ? '#4ADE80' : '#F87171',
                 }}
               />
               <span style={{ flex: 1, minWidth: 0, color: '#D3DAE6' }}>
-                {[u.termo, u.cidade].filter(Boolean).join(' em ') ||
-                  'consulta vazia'}
+                {u.consulta || 'consulta vazia'}
+                {/* Duas linhas com a mesma consulta e o mesmo minuto não são
+                    um registro duplicado: uma é a busca, a outra é a página
+                    seguinte. Sem esta marca elas pareceriam cobrança dobrada
+                    pela mesma pergunta. */}
+                {u.continuacao ? (
+                  <span style={{ color: '#7C8699' }}> · página seguinte</span>
+                ) : null}
+                {u.remotas ? (
+                  <span style={{ color: '#7C8699' }}> · só remotas</span>
+                ) : null}
               </span>
               <span style={{ flex: '0 0 auto', color: '#7C8699' }}>
                 {fmtDataHora(u.quando, true)}
@@ -3061,11 +3206,11 @@ function PainelControle({
                 style={{
                   flex: '0 0 62px',
                   textAlign: 'right',
-                  color: u.origem === 'rede' ? '#F0A0A0' : '#93B4FD',
+                  color: respondeuBem(u.status) ? '#9AE6B4' : '#F0A0A0',
                   fontSize: 12.5,
                 }}
               >
-                {u.origem === 'rede' ? 'rede' : 'cache'}
+                {u.status || '—'}
               </span>
             </div>
           ))
@@ -3265,10 +3410,115 @@ export default function App() {
   const [ranqueandoQuantas, setRanqueandoQuantas] = useState(0)
   const [erroRanking, setErroRanking] = useState(null)
 
-  // A cota vem do localStorage, não do zero: é a única coisa do protótipo que
-  // atravessa o recarregamento. Lida na inicialização preguiçosa para não
-  // tocar no storage a cada render.
-  const [cota, setCota] = useState(lerCota)
+  /**
+   * A cota, que era um estado e virou dois.
+   *
+   * Eram a mesma coisa enquanto tudo morava no `localStorage`. Deixaram de
+   * ser quando a contagem foi para o servidor, porque passaram a ter donos
+   * diferentes: **o número é da conta** — vem pela rede, e pode não chegar —,
+   * e **o cache é deste navegador**, que é onde ele sempre esteve e onde
+   * continua fazendo sentido. Um `useState` só teria de fingir que uma escrita
+   * local e uma resposta HTTP são o mesmo evento.
+   *
+   * O valor inicial é `rede: 0`, e é exatamente por isso que o painel não o
+   * desenha enquanto `cotaEstado` não é 'pronto': zero aqui significa "ainda
+   * não sei", não "não gastou nada".
+   */
+  const [cota, setCota] = useState({
+    desde: null,
+    rede: 0,
+    usos: [],
+    protegido: false,
+  })
+  /** 'carregando' | 'pronto' | 'falhou' — mesmos três do acervo. */
+  const [cotaEstado, setCotaEstado] = useState('carregando')
+  const [cotaErro, setCotaErro] = useState('')
+  // Muda para forçar uma nova tentativa depois de uma falha.
+  const [tentativaCota, setTentativaCota] = useState(0)
+  /**
+   * O segredo do controle é do dono e mora só no navegador dele.
+   *
+   * `localStorage` e não estado puro porque digitá-lo de novo a cada F5, para
+   * apertar um botão que se usa uma vez por mês, faria o dono deixá-lo anotado
+   * em outro lugar pior. Ele nunca sai daqui a não ser como header das duas
+   * rotas destrutivas — a leitura da cota não pede senha nenhuma.
+   */
+  const [segredo, setSegredo] = useState(() => {
+    try {
+      return localStorage.getItem('vagas:controle') ?? ''
+    } catch {
+      return ''
+    }
+  })
+
+  useEffect(() => {
+    let vivo = true
+
+    // Mesma forma do efeito do acervo, logo acima, e pela mesma razão: o
+    // `setCotaEstado('carregando')` só faz sentido a partir da segunda volta —
+    // um "Tentar de novo" precisa sair do estado 'falhou' antes de a resposta
+    // chegar, senão o botão parece não ter feito nada.
+    async function carregar() {
+      setCotaEstado('carregando')
+      try {
+        const lida = await lerCotaRemota()
+        if (!vivo) return
+        setCota(lida)
+        // Limpa o erro anterior: sem isto, uma leitura que deu certo depois de
+        // um "Tentar de novo" deixaria a mensagem da falha antiga na tela ao
+        // lado do número novo, dizendo que algo está errado quando não está.
+        setCotaErro('')
+        setCotaEstado('pronto')
+      } catch (err) {
+        if (!vivo) return
+        // `err.message` é português por construção do `ErroCota` e vai para a
+        // tela; `err.causa` é o texto cru do `fetch`, em inglês, e fica no
+        // console. Mesma divisão do acervo.
+        console.warn('[cota] falha ao carregar:', err.causa || err.message)
+        setCotaErro(err.message)
+        setCotaEstado('falhou')
+      }
+    }
+
+    carregar()
+    return () => {
+      vivo = false
+    }
+  }, [tentativaCota])
+
+  /**
+   * O que continua sendo deste navegador: o cache das consultas e a contagem
+   * de repetições que ele poupou. `lerCota` encolheu junto e devolve só
+   * `{ cache, totais: { cache } }` — ver o topo do `cota.js`.
+   */
+  const [cacheLocal, setCacheLocal] = useState(lerCota)
+
+  /**
+   * Uma falha de escrita da cota vira aviso, e não derruba o painel.
+   *
+   * Zerar e ajustar são pedidos do dono, não caminho de busca: falhar neles
+   * deixa o número como estava, que é um estado honesto. Reaproveita o
+   * `cotaErro` porque é a mesma linha da tela — só que aqui o painel continua
+   * 'pronto', com o número que já tinha.
+   */
+  function aviso(err) {
+    console.warn('[cota]', err.causa || err.message)
+    setCotaErro(err.message)
+  }
+
+  /**
+   * O par do `aviso`: a cota que o servidor devolveu, e o aviso anterior fora
+   * da tela.
+   *
+   * O 403 da senha errada é o erro comum aqui, e ele se conserta digitando a
+   * senha certa e apertando de novo. Sem esta limpeza o pedido daria certo, o
+   * número mudaria, e a linha vermelha continuaria ali dizendo que a senha
+   * está errada — o dono não teria como saber que funcionou.
+   */
+  function aplicarCota(lida) {
+    setCota(lida)
+    setCotaErro('')
+  }
 
   // Mesma ideia para o custo da Claude, mas quem grava é `custo.js`, chamado
   // de dentro de `api/claude.js` a cada resposta — o `App` não registra
@@ -3488,11 +3738,16 @@ export default function App() {
    * já custaram uma requisição cada e continuam guardadas, então o botão as
    * serve antes de gastar cota de novo.
    *
-   * Lê o cache de dentro do `cota` que já está em estado, e não do
-   * `localStorage`: `setCota(registrarUso(...))` devolve a cota atualizada,
-   * então esta memo reavalia sozinha depois de cada gravação — e a
+   * Lê o cache de dentro do `cacheLocal` que já está em estado, e não do
+   * `localStorage`: `setCacheLocal(registrarUso(...))` devolve o cache
+   * atualizado, então esta memo reavalia sozinha depois de cada gravação — e a
    * dependência fica honesta em vez de um acesso a storage escondido dentro
    * do render.
+   *
+   * É `cacheLocal` e não `cota` desde que os dois se separaram: o `cota` de
+   * hoje vem do servidor e não carrega cache nenhum. Ler dele aqui daria
+   * `undefined` calado, o botão "Carregar mais" iria à rede com página já
+   * paga na mão, e nada no lint apontaria para isto.
    */
   const paginaNoCache = useMemo(() => {
     if (aba !== 'vagas' || !consultaFeita) return null
@@ -3502,7 +3757,7 @@ export default function App() {
       janelaBaixada,
       modalidadeBaixada,
     )
-    return proximaPagina(chave ? cota.cache?.[chave] : null, banco.length)
+    return proximaPagina(chave ? cacheLocal.cache?.[chave] : null, banco.length)
   }, [
     aba,
     consultaFeita,
@@ -3511,7 +3766,7 @@ export default function App() {
     janelaBaixada,
     modalidadeBaixada,
     banco.length,
-    cota,
+    cacheLocal,
   ])
 
   const total = filtradas.length
@@ -3621,7 +3876,7 @@ export default function App() {
       setPagina(1)
       setErroBusca(null)
       setErroRanking(null)
-      setCota(
+      setCacheLocal(
         registrarUso(termo, cidadeAlvo, 'cache', {
           janela: janelaBaixada,
           modalidade: modalidadeBaixada,
@@ -3661,7 +3916,7 @@ export default function App() {
       // Sem restaurar o cursor, repetir a busca traria as vagas de volta e o
       // botão de carregar mais sumiria — como se a consulta tivesse acabado.
       setCursor(guardado.cursor ?? null)
-      setCota(
+      setCacheLocal(
         registrarUso(termo, cidadeAlvo, 'cache', {
           janela: janelaAlvo,
           modalidade: modalidadeAlvo,
@@ -3688,7 +3943,7 @@ export default function App() {
       setBanco(vagas)
       arquivar(vagas)
       setCursor(proximo)
-      setCota(
+      setCacheLocal(
         registrarUso(termo, cidadeAlvo, 'rede', {
           vagas,
           cursor: proximo,
@@ -3711,7 +3966,7 @@ export default function App() {
       setConsultaFeita(true)
       // Um erro que chegou à API consumiu uma das 200 mesmo sem devolver vaga.
       if (erro.tocouApi) {
-        setCota(
+        setCacheLocal(
           registrarUso(termo, cidadeAlvo, 'rede', {
             janela: janelaAlvo,
             modalidade: modalidadeAlvo,
@@ -3759,7 +4014,7 @@ export default function App() {
       const doCache = paginaNoCache
       setBanco((atual) => [...atual, ...doCache])
       arquivar(doCache)
-      setCota(
+      setCacheLocal(
         registrarUso(termo, cidadeAlvo, 'cache', {
           janela: janelaBaixada,
           modalidade: modalidadeBaixada,
@@ -3810,7 +4065,7 @@ export default function App() {
         modalidadeBaixada,
       )
       const paginasAtuais = paginasDoCache(entradaAtual)
-      setCota(
+      setCacheLocal(
         registrarUso(termo, cidadeAlvo, 'rede', {
           vagas: listaCompleta,
           cursor: proximo,
@@ -3830,7 +4085,7 @@ export default function App() {
       // A lista que já estava na tela fica: ela custou requisições anteriores,
       // e o erro é da página nova, não dela.
       if (erro.tocouApi) {
-        setCota(
+        setCacheLocal(
           registrarUso(termo, cidadeAlvo, 'rede', {
             janela: janelaBaixada,
             modalidade: modalidadeBaixada,
@@ -4000,7 +4255,7 @@ export default function App() {
     const guardado = consultarCache(termo, cidadeAlvo, JANELA_PADRAO)
     if (guardado) {
       setVagasIa(guardado.vagas)
-      setCota(
+      setCacheLocal(
         registrarUso(termo, cidadeAlvo, 'cache', { janela: JANELA_PADRAO }),
       )
       setBuscaIaFeita(true)
@@ -4022,7 +4277,7 @@ export default function App() {
       // de cache quando a aba Vagas está na janela padrão, e uma entrada
       // gravada sem ele faria o "Carregar mais" de lá sumir depois de uma
       // busca inteligente.
-      setCota(
+      setCacheLocal(
         registrarUso(termo, cidadeAlvo, 'rede', {
           vagas,
           cursor: cursorDaResposta(resposta),
@@ -4042,7 +4297,7 @@ export default function App() {
       // Mesmo raciocínio de `buscar()`: um erro que chegou à API consumiu
       // uma das 200 mesmo sem devolver vaga.
       if (erro.tocouApi) {
-        setCota(
+        setCacheLocal(
           registrarUso(termo, cidadeAlvo, 'rede', { janela: JANELA_PADRAO }),
         )
       }
@@ -4528,9 +4783,29 @@ export default function App() {
           {aba === 'controle' && (
             <PainelControle
               cota={cota}
-              onZerar={() => setCota(zerarContagem())}
-              onAjustar={(gastas) => setCota(ajustarContagem(gastas))}
-              onLimparCache={() => setCota(limparCache())}
+              estado={cotaEstado}
+              erro={cotaErro}
+              onTentarDeNovo={() => setTentativaCota((n) => n + 1)}
+              // As duas contagens do painel, cada uma da sua fonte: `cota` vem
+              // do servidor, `doCache` sai do cache deste navegador.
+              doCache={servidasDoCache(cacheLocal)}
+              // Zerar e ajustar devolvem a cota nova — o servidor responde com
+              // ela —, então o que entra no estado é a resposta autoritativa e
+              // não um palpite otimista.
+              onZerar={() => zerarRemoto(segredo).then(aplicarCota).catch(aviso)}
+              onAjustar={(gastas) =>
+                ajustarRemoto(gastas, segredo).then(aplicarCota).catch(aviso)
+              }
+              onLimparCache={() => setCacheLocal(limparCache())}
+              segredo={segredo}
+              onSegredo={(valor) => {
+                setSegredo(valor)
+                try {
+                  localStorage.setItem('vagas:controle', valor)
+                } catch {
+                  // Storage bloqueado: a senha vale só nesta sessão.
+                }
+              }}
               custo={custo}
               onZerarCusto={() => setCusto(zerarCusto())}
             />

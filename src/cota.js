@@ -1,56 +1,63 @@
 /**
- * Controle da cota de requisições da JSearch.
+ * O cache das consultas da JSearch — e a única contagem que sobrou aqui.
  *
- * O plano gratuito dá 200 chamadas por mês, e o protótipo ainda não gasta
- * nenhuma — o `buscar()` não chega à rede. Este módulo registra o que *seria*
- * gasto, para o número já estar de pé quando a chamada real entrar.
- *
- * É a única coisa do protótipo que sobrevive ao recarregamento. Uma cota
- * mensal que zera a cada F5 não controla nada, então aqui vale `localStorage`
- * — que continua sendo só a máquina de quem abre, sem servidor no meio.
+ * Este módulo já foi o controle da cota inteiro: contava as requisições,
+ * guardava o histórico da tela e mantinha o cache, tudo no `localStorage`. A
+ * contagem saiu — mora no servidor agora, em `servidor/contagem.js`, e chega
+ * à tela pelo `cotaRemota.js`. Ficou o cache, e o único número derivado dele:
+ * quantas repetições ele respondeu sem ir à rede.
  *
  * Toda leitura e escrita é defensiva: em aba anônima, com storage bloqueado ou
  * com o valor corrompido por uma versão anterior, o acesso lança. A tela não
- * pode quebrar por causa do contador — no pior caso ele volta a zero.
+ * pode quebrar por causa do cache — no pior caso ele volta a vazio, e o preço
+ * é uma requisição a mais.
  *
- * ## Duas listas que já foram uma só
+ * ## Por que o cache continua sendo do navegador
  *
- * `usos` é o histórico da tela e tem teto; `totais` é a contagem e não tem.
- * A separação é a correção de um defeito visto em produção: com a contagem
- * saindo do histórico cortado, o painel mostrava **3 / 200** com 50
- * requisições já gastas na conta. Cada repetição servida do cache entrava na
- * mesma lista e empurrava uma requisição paga para fora do corte — o número
- * encolhia sozinho, e encolhia quando o app acertava.
+ * A contagem foi para o servidor porque ela é **da conta**: as 200 do mês são
+ * debitadas na OpenWeb Ninja venha o pedido de onde vier, e um contador por
+ * origem — um no app publicado, outro no `npm run dev` — nunca sabia do
+ * outro. Errar esse número custa dinheiro.
  *
- * ## E o total ainda é do navegador, não da conta
+ * O cache é o contrário em todos os pontos que importam. Ele existe para uma
+ * pessoa não pagar duas vezes pela mesma pergunta, e "a mesma pergunta" é uma
+ * ideia de sessão, não de conta: o que está em cache é o recorte exato de uma
+ * consulta, com o cursor de paginação dela, e isso não se reaproveita entre
+ * pessoas que perguntaram coisas diferentes. Errá-lo custa, no pior caso, uma
+ * requisição repetida.
  *
- * Nem com a contagem certa este número é a cota: as 200 são da conta na
- * OpenWeb Ninja, e o `localStorage` é de um navegador e de uma origem. Buscar
- * pelo app publicado e pelo `npm run dev` debita as mesmas 200 e alimenta dois
- * contadores diferentes, nenhum dos dois sabendo do outro. Quem sabe o número
- * verdadeiro é o painel do provedor — e `ajustarContagem` é por onde ele entra.
+ * E compartilhá-lo seria caro: são as vagas inteiras, com descrição — o mesmo
+ * peso que o `GET /api/acervo` já evita não mandando `descricao`. O que havia
+ * de aproveitável entre duas pessoas o acervo compartilhado já cobre: tudo
+ * que qualquer busca trouxe fica lá, para todo mundo.
+ *
+ * Daí a assimetria que o painel Controle mostra na cara: o número lá em cima é
+ * da conta, o contador de repetições logo abaixo é deste navegador, e os dois
+ * dizem isso na tela — porque quem lê precisa saber qual dos dois muda quando
+ * outra pessoa busca.
  */
 
 import { JANELA_PADRAO, apiDaJanela } from './janela'
 import { MODALIDADE_PADRAO, soRemotas } from './modalidade'
 
+/**
+ * As 200 do plano gratuito.
+ *
+ * Continua aqui, e não no `cotaRemota.js`, porque é um fato do contrato com o
+ * provedor e não um dado que o servidor devolve: a rota `/api/cota` manda
+ * quantas foram gastas, nunca quantas cabem. O painel importa as duas coisas
+ * de lugares diferentes de propósito — o teto é conhecido, o gasto é lido.
+ */
 export const LIMITE_MENSAL = 200
 
 const CHAVE = 'vagas:cota'
 
 /**
- * Quantas buscas o histórico da tela guarda.
- *
- * É teto de **exibição**, não de contagem: a lista existe para mostrar as
- * últimas, e guardar mil linhas para renderizar as cinquenta primeiras só
- * gastaria storage. Foi este teto que corrompeu a cota enquanto ela era
- * derivada daqui — mexer nele hoje muda o tamanho da lista e mais nada.
+ * Uma função e não uma constante compartilhada: quem recebe isto pode gravar
+ * em cima, e duas leituras que devolvessem o *mesmo* objeto vazio ficariam
+ * ligadas uma à outra sem ninguém pedir.
  */
-export const TETO_HISTORICO = 50
-
-const SEM_TOTAIS = { rede: 0, cache: 0 }
-
-const VAZIO = { desde: null, usos: [], cache: {}, totais: SEM_TOTAIS }
+const vazia = () => ({ cache: {}, totais: { cache: 0 } })
 
 /** Contagem só é contagem se for inteira e não-negativa; o resto é lixo. */
 function contagemValida(n) {
@@ -58,39 +65,30 @@ function contagemValida(n) {
 }
 
 /**
- * Os totais gravados — ou, para cota escrita antes deles existirem, o que o
- * histórico ainda sabe.
+ * O que ficou no `localStorage`: o cache e o contador de repetições.
  *
- * O histórico subconta, que é o defeito inteiro. Mas quem já tinha cota
- * gravada não pode voltar a zero no primeiro deploy: continuar de onde ele
- * parou erra menos que descartá-lo, e o botão de ajustar conserta o resto.
+ * `usos` e `desde` saíram do formato gravado, e o que já estiver escrito com
+ * eles é lido normalmente — os campos antigos são simplesmente ignorados, e a
+ * primeira gravação os descarta. Ninguém perde cache por causa disso, que é o
+ * único conteúdo caro aqui dentro.
+ *
+ * O contador de repetições de uma cota antiga volta a zero, e é de propósito:
+ * ele é uma estatística de economia, não dinheiro. Derivá-lo do `usos` legado
+ * obrigaria este módulo a continuar conhecendo um formato que ele deixou de
+ * escrever, para acertar um número que não paga nada.
  */
-function totaisLidos(dados, usos) {
-  const gravados = dados?.totais
-  const daLista = (origem) => usos.filter((u) => u?.origem === origem).length
-  return {
-    rede: contagemValida(gravados?.rede) ?? daLista('rede'),
-    cache: contagemValida(gravados?.cache) ?? daLista('cache'),
-  }
-}
-
-/** Só o que a tela precisa saber para desenhar o painel. */
 export function lerCota() {
   try {
     const cru = localStorage.getItem(CHAVE)
-    if (!cru) return { ...VAZIO, usos: [], cache: {}, totais: { ...SEM_TOTAIS } }
+    if (!cru) return vazia()
     const dados = JSON.parse(cru)
     // Um formato antigo ou adulterado não pode derrubar a página.
-    const usos = Array.isArray(dados.usos) ? dados.usos : []
     return {
-      desde: typeof dados.desde === 'string' ? dados.desde : null,
-      usos,
-      cache:
-        dados.cache && typeof dados.cache === 'object' ? dados.cache : {},
-      totais: totaisLidos(dados, usos),
+      cache: dados.cache && typeof dados.cache === 'object' ? dados.cache : {},
+      totais: { cache: contagemValida(dados?.totais?.cache) ?? 0 },
     }
   } catch {
-    return { ...VAZIO, usos: [], cache: {}, totais: { ...SEM_TOTAIS } }
+    return vazia()
   }
 }
 
@@ -98,8 +96,9 @@ function gravar(cota) {
   try {
     localStorage.setItem(CHAVE, JSON.stringify(cota))
   } catch {
-    // Storage cheio ou bloqueado: o contador vira volátil nesta sessão, mas a
-    // busca em si não tem por que falhar.
+    // Storage cheio ou bloqueado: o cache vira volátil nesta sessão — as
+    // repetições voltam a custar cota —, mas a busca em si não tem por que
+    // falhar por causa disso.
   }
   return cota
 }
@@ -239,11 +238,23 @@ export function consultarCache(
 }
 
 /**
- * Registra uma busca e devolve a cota atualizada.
+ * Registra uma busca e devolve o cache atualizado.
  *
  * `origem` é decidida por quem chamou: 'rede' se a requisição saiu, 'cache' se
  * foi servida do que já estava guardado. Consulta vazia não registra nada —
  * não haveria requisição a fazer.
+ *
+ * O que ele **não** faz mais é contar requisições de rede nem acumular
+ * histórico: as duas coisas são da conta e passaram para o servidor, que as
+ * observa no HTTP e não depende de o cliente lembrar de avisar. Sobrou o que
+ * é deste navegador — gravar a resposta no cache, e somar as vezes em que o
+ * cache dispensou uma requisição. Por isso `origem` continua importando aqui:
+ * 'rede' escreve o cache, 'cache' incrementa o contador.
+ *
+ * **A assinatura não muda, e não é acidente.** São dez chamadores no
+ * `App.jsx`, e este módulo já quebrou uma aba inteira ao ser renomeado sem
+ * que o lint dissesse nada (`registrarBusca` → `registrarUso`). Quem mexer
+ * nela de novo tem dez lugares para acertar à mão.
  *
  * O quarto argumento é um objeto (`{ vagas, cursor }`) e não a lista solta que
  * era antes: com a paginação por cursor passaram a ser duas coisas a guardar,
@@ -292,70 +303,13 @@ export function registrarUso(
   }
 
   return gravar({
-    desde: cota.desde ?? quando,
-    usos: [
-      {
-        chave,
-        termo: termo.trim(),
-        cidade: cidade.trim(),
-        janela,
-        quando,
-        origem,
-      },
-      ...cota.usos,
-      // O corte é da lista, e só dela. A contagem sai de `totais` justamente
-      // para não morrer aqui: enquanto ela vinha daqui, cada repetição
-      // servida do cache empurrava uma requisição paga para fora do teto e
-      // o painel passava a mostrar menos do que a conta já tinha gasto.
-    ].slice(0, TETO_HISTORICO),
-    // Incremento, não recontagem: é o que faz o número sobreviver ao corte
-    // acima e à troca de página.
-    totais: {
-      rede: cota.totais.rede + (origem === 'rede' ? 1 : 0),
-      cache: cota.totais.cache + (origem === 'cache' ? 1 : 0),
-    },
+    // Incremento, e não recontagem a partir de uma lista: é o que faz o número
+    // sobreviver à troca de página e ao esvaziamento do cache. A contagem de
+    // rede não está aqui de propósito — quem conta requisição é quem a faz, e
+    // isso é o servidor.
+    totais: { cache: cota.totais.cache + (origem === 'cache' ? 1 : 0) },
     cache,
   })
-}
-
-/** Zerado à mão quando o plano renova: o provedor conta pela data da
- *  assinatura, não pelo dia 1º, e adivinhar isso daria um número errado. */
-export function zerarContagem(agora = new Date()) {
-  const cota = lerCota()
-  return gravar({
-    ...cota,
-    desde: agora.toISOString(),
-    usos: [],
-    // Os totais também. Enquanto a contagem era derivada do histórico, esvaziar
-    // um zerava o outro de graça; agora são duas coisas, e esquecer esta linha
-    // deixaria o painel dizendo que o ciclo novo já nasceu gasto.
-    totais: { ...SEM_TOTAIS },
-  })
-}
-
-/**
- * Põe a contagem no número que o provedor mostra.
- *
- * Existe porque o total verdadeiro não mora neste navegador. As 200 são da
- * conta na OpenWeb Ninja; o contador é do `localStorage` de uma origem. Abrir
- * o app publicado no celular, trocar de máquina, ou alternar entre o Railway e
- * o `npm run dev` cria contadores que se ignoram enquanto o provedor debita
- * das mesmas 200 — e não há de onde o app deduzir o que foi gasto fora dele.
- *
- * O histórico não é tocado: as linhas que estão lá aconteceram mesmo, e
- * apagá-las para casar com um número maior seria trocar um dado verdadeiro por
- * uma aparência de coerência. Pela mesma razão o cache fica: as consultas
- * guardadas continuam valendo, e são elas que evitam gastar de novo.
- *
- * Valor que não é contagem é ignorado em silêncio — o campo da tela é um
- * `number`, e um `NaN` vindo dele não pode virar o teto do painel.
- */
-export function ajustarContagem(gastas) {
-  const alvo = contagemValida(Math.round(Number(gastas)))
-  if (alvo === null) return lerCota()
-
-  const cota = lerCota()
-  return gravar({ ...cota, totais: { ...cota.totais, rede: alvo } })
 }
 
 /** Esvazia o cache: as próximas buscas voltam a consumir cota. */
@@ -364,24 +318,14 @@ export function limparCache() {
 }
 
 /**
- * Quantas requisições este navegador registrou no ciclo.
+ * As repetições que o cache respondeu sem ir à rede.
  *
- * Sai de `totais`, não de `usos`. A queda para o histórico é para o caso de
- * receber uma cota montada à mão — em teste, ou por um chamador que ainda não
- * conhece o campo novo —, e não é o caminho normal: ele subconta.
+ * Sai de `totais`, e só de `totais`. Havia aqui uma queda para contar
+ * filtrando `usos`, para o caso de uma cota montada à mão: ela morreu com o
+ * `usos`, que não é mais escrito nem lido. Um fallback que não pode rodar é
+ * pior que nenhum — quem ler depois gasta o tempo de descobrir que era
+ * inalcançável.
  */
-export function usadas(cota) {
-  return contarPor(cota, 'rede')
-}
-
-/** As repetições que o cache respondeu, pelo mesmo mecanismo. */
 export function servidasDoCache(cota) {
-  return contarPor(cota, 'cache')
-}
-
-function contarPor(cota, origem) {
-  const total = contagemValida(cota?.totais?.[origem])
-  if (total !== null) return total
-  const usos = Array.isArray(cota?.usos) ? cota.usos : []
-  return usos.filter((u) => u?.origem === origem).length
+  return contagemValida(cota?.totais?.cache) ?? 0
 }
