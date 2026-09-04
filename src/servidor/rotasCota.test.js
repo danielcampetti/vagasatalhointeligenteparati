@@ -100,4 +100,55 @@ describe('o segredo do controle', () => {
     expect(res.status).toBe(200)
     expect((await res.json()).protegido).toBe(true)
   })
+
+  /**
+   * As três rotas devolvem a mesma coisa, e `protegido` faz parte dela.
+   *
+   * Ele só existia no GET, e a tela pagou por isso: o painel guarda a resposta
+   * inteira em estado, então um "Zerar" bem-sucedido substituía o objeto por
+   * um sem `protegido` — e o campo da senha, mais o texto que o explica,
+   * sumiam do painel no meio da sessão. Quem tivesse digitado a senha errada
+   * ficava sem UI para corrigir, sem F5.
+   *
+   * A correção é aqui e não no cliente de propósito: com uma resposta só, o
+   * cliente deixa de precisar saber quais campos vêm de qual verbo — que é
+   * exatamente o conhecimento que se perdeu.
+   */
+  test('as três rotas devolvem `protegido`, e não só o GET', async () => {
+    process.env.CONTROLE_SEGREDO = 'abre-te-sesamo'
+    const comSenha = { 'x-controle-segredo': 'abre-te-sesamo' }
+
+    const lida = await fetch(`${base}/api/cota`).then((r) => r.json())
+    const zerada = await fetch(`${base}/api/cota/zerar`, {
+      method: 'POST',
+      headers: comSenha,
+    }).then((r) => r.json())
+    const ajustada = await fetch(`${base}/api/cota/ajustar`, {
+      method: 'POST',
+      headers: { ...comSenha, 'content-type': 'application/json' },
+      body: JSON.stringify({ gastas: 7 }),
+    }).then((r) => r.json())
+
+    expect(lida.protegido).toBe(true)
+    expect(zerada.protegido).toBe(true)
+    expect(ajustada.protegido).toBe(true)
+  })
+
+  // E o mesmo com o servidor aberto: `false` nas três, nunca ausente — o
+  // painel distingue "não pede senha" de "não sei", e `undefined` é o segundo.
+  test('servidor aberto responde protegido: false nas três, e não undefined', async () => {
+    const lida = await fetch(`${base}/api/cota`).then((r) => r.json())
+    const zerada = await fetch(`${base}/api/cota/zerar`, {
+      method: 'POST',
+    }).then((r) => r.json())
+    const ajustada = await fetch(`${base}/api/cota/ajustar`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ gastas: 7 }),
+    }).then((r) => r.json())
+
+    expect(lida.protegido).toBe(false)
+    expect(zerada.protegido).toBe(false)
+    expect(ajustada.protegido).toBe(false)
+  })
 })

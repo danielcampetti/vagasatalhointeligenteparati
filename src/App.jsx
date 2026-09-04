@@ -3451,7 +3451,34 @@ export default function App() {
     }
   })
 
+  /**
+   * A cota é lida ao abrir o Controle, e não uma vez por carregamento.
+   *
+   * Ler só no mount deixava o número envelhecer **na direção que custa
+   * dinheiro**. A página abre com 180/200, a pessoa faz 15 buscas, entra no
+   * Controle para decidir se continua, e lê 180 com "20 requisições
+   * restantes" — quando são 195 e 5. É a mesma mentira do `0 / 200`, por
+   * envelhecimento em vez de por zero, e agravada por a lista "Últimas
+   * requisições" estar defasada junto: as buscas da própria sessão não
+   * aparecem, e a lista curta faz o número parecer conferido.
+   *
+   * A dependência é a **aba**, e não um botão de atualizar, porque o momento
+   * em que o número precisa estar certo é exatamente o momento em que alguém
+   * olha para ele. Trocar de aba não remonta o painel sozinho (este estado
+   * vive no `App`, não nele), então é aqui que a ida à rede tem de ser
+   * amarrada.
+   *
+   * A guarda no topo é o outro lado da regra: o efeito reavalia a cada troca
+   * de aba, mas só sai para a rede quando a aba é o Controle. Passear entre
+   * Vagas e Banco de Dados não gasta requisição nenhuma — e quem nunca abre o
+   * painel nunca pede a cota.
+   *
+   * Voltar para 'carregando' a cada entrada é deliberado: mostrar o número
+   * antigo enquanto o novo vem é precisamente o defeito que este efeito
+   * conserta, e a leitura é um SELECT no SQLite ao lado.
+   */
   useEffect(() => {
+    if (aba !== 'controle') return
     let vivo = true
 
     // Mesma forma do efeito do acervo, logo acima, e pela mesma razão: o
@@ -3484,7 +3511,7 @@ export default function App() {
     return () => {
       vivo = false
     }
-  }, [tentativaCota])
+  }, [aba, tentativaCota])
 
   /**
    * O que continua sendo deste navegador: o cache das consultas e a contagem

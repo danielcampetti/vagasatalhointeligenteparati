@@ -1,7 +1,7 @@
 import { act } from 'react'
 import { createRoot } from 'react-dom/client'
-import { afterEach, describe, expect, test } from 'vitest'
-import { Linha, PainelControle } from './App'
+import { afterEach, beforeEach, describe, expect, test } from 'vitest'
+import App, { Linha, PainelControle } from './App'
 
 /**
  * A linha da tabela, e a vaga que ela não sabia desenhar.
@@ -140,11 +140,28 @@ describe('PainelControle: falha nunca vira zero', () => {
     />
   )
 
+  /**
+   * A asserção do "não" mira `'/ 200 requisições'`, e a escolha tem história.
+   *
+   * A primeira versão dela procurava `'0 / 200'` — uma string que o painel
+   * **nunca** produz: o número e o "/ 200 requisições" são dois `<span>`
+   * irmãos sem espaço entre eles, então o `textContent` sai `'0/ 200
+   * requisições'`. O teste escrito para travar a regra que este plano inteiro
+   * existe para garantir passava com a proteção removida.
+   *
+   * `'/ 200 requisições'` é o rótulo do cartão do número, e ele só existe no
+   * ramo 'pronto'. Procurá-lo é perguntar "o cartão do número foi
+   * desenhado?", que é a pergunta certa — e não depende de o número ser zero,
+   * nem de como o React junta os nós de texto.
+   */
   test('estado falhou mostra o erro, e não o número zero', () => {
     const container = montar(painel())
 
     expect(container.textContent).toContain('O servidor respondeu 500.')
-    expect(container.textContent).not.toContain('0 / 200')
+    expect(container.textContent).not.toContain('/ 200 requisições')
+    // A segunda metade da mentira: "20 requisições restantes" é tão cara
+    // quanto o número em si, e mora noutro parágrafo do mesmo cartão.
+    expect(container.textContent).not.toContain('requisições restantes')
   })
 
   /**
@@ -157,7 +174,8 @@ describe('PainelControle: falha nunca vira zero', () => {
     const container = montar(painel({ estado: 'carregando', erro: '' }))
 
     expect(container.textContent).toContain('Lendo a cota')
-    expect(container.textContent).not.toContain('0 / 200')
+    expect(container.textContent).not.toContain('/ 200 requisições')
+    expect(container.textContent).not.toContain('requisições restantes')
   })
 
   /**
@@ -273,5 +291,101 @@ describe('PainelControle: o histórico do servidor', () => {
     const container = pronto(undefined)
 
     expect(container.textContent).toContain('/ 200 requisições')
+  })
+})
+
+/**
+ * O número não pode envelhecer na tela — e envelhecer só tem uma direção.
+ *
+ * O `0 / 200` por queda de rede é o caso agudo; este é o crônico, e mente na
+ * mesma direção. A página carrega com 180/200, a pessoa faz 15 buscas, abre
+ * Controle para decidir se continua, e lê **180 / 200, "20 requisições
+ * restantes"**, com a barra ainda em âmbar. A verdade é 195 e 5 restantes.
+ * Pior: a lista "Últimas requisições" está defasada do mesmo jeito, então as
+ * buscas da própria sessão não aparecem — e o número parece corroborado por
+ * ela.
+ *
+ * A leitura, portanto, é atrelada à aba: quem abre o Controle recebe o número
+ * daquele momento. E só a essa aba — trocar entre Vagas e Banco de Dados não
+ * pode disparar requisição nenhuma ao servidor da cota.
+ */
+describe('a cota é lida quando o painel é aberto, não uma vez por carregamento', () => {
+  let pedidos
+
+  /**
+   * Um `fetch` de mentira que só anota quem foi chamado.
+   *
+   * Objeto cru e não `Response`: o `cotaRemota.js` e o `acervoRemoto.js` usam
+   * `ok`, `status` e `json()`, e mais nada — um dublê com a superfície exata
+   * do que é consumido falha alto se alguém passar a depender de outra coisa.
+   */
+  beforeEach(() => {
+    pedidos = []
+    globalThis.fetch = async (url) => {
+      const caminho = String(url)
+      pedidos.push(caminho)
+      const corpo = caminho.startsWith('/api/cota')
+        ? { desde: null, rede: 3, usos: [], protegido: false }
+        : []
+      return { ok: true, status: 200, json: async () => corpo }
+    }
+  })
+
+  const daCota = () => pedidos.filter((p) => p.startsWith('/api/cota')).length
+
+  async function montarApp() {
+    const container = document.createElement('div')
+    document.body.appendChild(container)
+    const raiz = createRoot(container)
+    raizes.push({ raiz, container })
+    // `act` assíncrono para as promessas dos efeitos assentarem antes das
+    // asserções — sem ele o teste leria o estado do render que antecede a
+    // resposta.
+    await act(async () => raiz.render(<App />))
+    return container
+  }
+
+  /** Clica no item de navegação pelo texto — é assim que a pessoa troca de aba. */
+  async function irPara(container, nome) {
+    const item = [...container.querySelectorAll('button')].find(
+      (b) => b.textContent.trim() === nome,
+    )
+    expect(item, `não achei a aba "${nome}"`).toBeTruthy()
+    await act(async () => item.click())
+  }
+
+  test('carregar a página com outra aba aberta não pede a cota', async () => {
+    await montarApp()
+
+    expect(daCota()).toBe(0)
+  })
+
+  test('abrir o Controle lê a cota do momento', async () => {
+    const container = await montarApp()
+    await irPara(container, 'Controle')
+
+    expect(daCota()).toBe(1)
+    expect(container.textContent).toContain('/ 200 requisições')
+  })
+
+  // O caso do defeito: sair e voltar tem que trazer número novo, porque entre
+  // uma coisa e outra a pessoa buscou.
+  test('voltar ao Controle depois de buscar lê de novo', async () => {
+    const container = await montarApp()
+    await irPara(container, 'Controle')
+    await irPara(container, 'Vagas')
+    await irPara(container, 'Controle')
+
+    expect(daCota()).toBe(2)
+  })
+
+  // E o outro lado da regra: não é uma requisição por troca de aba.
+  test('trocar entre abas que não são o Controle não pede a cota', async () => {
+    const container = await montarApp()
+    await irPara(container, 'Banco de Dados')
+    await irPara(container, 'Vagas')
+    await irPara(container, 'Banco de Dados')
+
+    expect(daCota()).toBe(0)
   })
 })

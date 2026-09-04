@@ -50,6 +50,26 @@ function comSegredo(req, res, next) {
   })
 }
 
+/**
+ * A cota como ela sai daqui, pelas três rotas.
+ *
+ * `protegido` já esteve só no GET, e o painel pagou por isso. Ele guarda a
+ * resposta inteira em estado; um "Zerar" bem-sucedido substituía o objeto por
+ * um sem o campo, e o campo da senha — junto com o texto que o explica — sumia
+ * da tela no meio da sessão. Quem tivesse errado a senha ficava sem UI para
+ * corrigir, a não ser recarregando a página.
+ *
+ * Uma resposta só para os três verbos é o conserto certo porque é o que
+ * dispensa o cliente de saber qual campo vem de qual verbo — e era esse
+ * conhecimento, guardado em lugar nenhum, que se perdeu.
+ *
+ * O booleano é lido a cada resposta, e não capturado: `segredoDoAmbiente()`
+ * consulta o `process.env` na hora, pela mesma razão que ele já era assim.
+ */
+function comoSai(dados) {
+  return { ...dados, protegido: Boolean(segredoDoAmbiente()) }
+}
+
 export function criarRotasCota(cota) {
   const rotas = express()
   const json = express.json({ limit: '4kb' })
@@ -62,15 +82,15 @@ export function criarRotasCota(cota) {
    * tela se deve pedir a senha, e não revela nada sobre ela.
    */
   rotas.get('/', (_req, res) => {
-    res.json({ ...cota.ler(), protegido: Boolean(segredoDoAmbiente()) })
+    res.json(comoSai(cota.ler()))
   })
 
   rotas.post('/zerar', comSegredo, (_req, res) => {
-    res.json(cota.zerar())
+    res.json(comoSai(cota.zerar()))
   })
 
   rotas.post('/ajustar', comSegredo, json, (req, res) => {
-    res.json(cota.ajustar(req.body?.gastas))
+    res.json(comoSai(cota.ajustar(req.body?.gastas)))
   })
 
   return rotas
