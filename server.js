@@ -131,6 +131,14 @@ function reproxiar(destino) {
       res.send(Buffer.from(await resposta.arrayBuffer()))
     } catch (err) {
       console.error(`[${destino.nome}] erro de proxy:`, err.message)
+      // O upstream não respondeu: nenhuma cota foi debitada. Sem este
+      // marcador, este 502 é indistinguível de um 502 vindo da própria API, e
+      // a contagem creditaria uma requisição que nunca aconteceu. Só a
+      // JSearch tem cota de 200/mês para proteger — a Claude é cobrada por
+      // token, não tem teto de chamadas, e não deve ganhar este marcador.
+      if (destino.nome === 'jsearch') {
+        res.setHeader(`x-${destino.nome}-proxy`, 'sem-resposta')
+      }
       // 502 e não 500: o servidor está de pé, quem não respondeu foi o
       // upstream. A distinção importa para quem lê o log depois.
       res.status(502).json({

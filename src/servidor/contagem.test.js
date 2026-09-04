@@ -130,3 +130,26 @@ describe('contarJSearch: nunca derruba a busca', () => {
     expect(erro).toHaveBeenCalled()
   })
 })
+
+describe('vite: o proxy do dev marca o mesmo', () => {
+  /**
+   * O `npm run dev` usa outro proxy, e o README promete que ele se comporta
+   * igual. Sem o marcador dos dois lados, contar em produção e contar no dev
+   * dariam números diferentes pela mesma falha de rede.
+   */
+  test('proxy.on("error") põe sem-resposta na resposta', async () => {
+    const { default: configVite } = await import('../../vite.config.js')
+    const config = await configVite({ mode: 'development' })
+    const alvo = config.server.proxy['/api/jsearch']
+
+    const ouvintes = {}
+    alvo.configure({ on: (evento, fn) => (ouvintes[evento] = fn) })
+
+    const postos = {}
+    const res = { headersSent: false, setHeader: (k, v) => (postos[k] = v) }
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    ouvintes.error(new Error('ECONNREFUSED'), {}, res)
+
+    expect(postos['x-jsearch-proxy']).toBe('sem-resposta')
+  })
+})

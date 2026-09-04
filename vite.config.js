@@ -116,8 +116,14 @@ export default defineConfig(({ mode }) => {
             proxy.on('proxyRes', (proxyRes, req) => {
               console.log(`[jsearch] <- ${proxyRes.statusCode} ${req.url}`)
             })
-            proxy.on('error', (err) => {
+            proxy.on('error', (err, _req, res) => {
               console.error('[jsearch] erro de proxy:', err.message)
+              // O mesmo marcador do `server.js`: upstream inalcançável não
+              // debitou cota. Sem ele, dev e produção contariam diferente
+              // pela mesma falha de rede.
+              if (res?.setHeader && !res.headersSent) {
+                res.setHeader('x-jsearch-proxy', 'sem-resposta')
+              }
             })
           },
         },
